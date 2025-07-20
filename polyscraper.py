@@ -282,14 +282,12 @@ def main():
     collect_data_once()
 
 def main_multi_run(num_runs=5):
-    """Run the scraper multiple times with 1-minute intervals."""
+    """Run the scraper multiple times with 1-minute intervals - ONLY collects bid/ask data."""
     output_csv = 'btc_polydata.csv'
-
-    # Update the markets first (only once)
-    update_markets_csv()
 
     print(f"\n--- Running Polymarket Scraper ({num_runs} runs with 1-minute intervals) ---")
     print(f"Data will be saved to {output_csv}")
+    print("*** NOT updating markets - just collecting bid/ask data ***")
 
     for i in range(num_runs):
         print(f"\n--- Run {i+1}/{num_runs} ---")
