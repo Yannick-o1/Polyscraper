@@ -1,0 +1,72 @@
+name: Polymarket Scraper
+
+on:
+  schedule:
+    # Run data collection every 5 minutes (GitHub Actions minimum)
+    - cron: '*/5 * * * *'
+    # Update markets every 2 days (48 hours - closest to your 50 hour requirement)
+    - cron: '0 2 */2 * *'
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  scrape-data:
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '*/5 * * * *' || github.event_name == 'workflow_dispatch'
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Run scraper (data collection)
+      run: python polyscraper.py
+
+    - name: Commit and push changes
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add btc_polydata.csv
+        git diff --staged --quiet || git commit -m "Update BTC polydata - $(date)"
+        git push
+
+  update-markets:
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 2 */2 * *' || github.event_name == 'workflow_dispatch'
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Update markets list
+      run: python polyscraper.py --update-markets
+
+    - name: Commit and push changes
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add btc_polymarkets.csv
+        git diff --staged --quiet || git commit -m "Update BTC polymarkets list - $(date)"
+        git push 
