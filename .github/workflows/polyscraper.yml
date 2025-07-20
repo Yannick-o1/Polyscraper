@@ -1,17 +1,21 @@
 name: Polymarket Scraper
 
 on:
-  schedule:
-    # Run data collection every 5 minutes (each run collects 5 data points)
-    - cron: '*/5 * * * *'
-    # Update markets every 2 days (48 hours - closest to your 50 hour requirement)
-    - cron: '0 2 */2 * *'
-  workflow_dispatch: # Allow manual triggering
+  workflow_dispatch:
+    inputs:
+      job_to_run:
+        description: 'Which job to run? (scrape-data or update-markets)'
+        required: true
+        default: 'scrape-data'
+        type: choice
+        options:
+        - scrape-data
+        - update-markets
 
 jobs:
   scrape-data:
     runs-on: ubuntu-latest
-    if: github.event.schedule == '*/5 * * * *' || github.event_name == 'workflow_dispatch'
+    if: github.event.inputs.job_to_run == 'scrape-data' || github.event_name == 'workflow_dispatch'
     
     steps:
     - name: Checkout repository
@@ -29,8 +33,8 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Run scraper (data collection - 5 runs with 1-minute intervals)
-      run: python polyscraper.py --multi-run 5
+    - name: Run scraper (single data collection)
+      run: python polyscraper.py --run-once
 
     - name: Commit and push changes
       run: |
@@ -42,7 +46,7 @@ jobs:
 
   update-markets:
     runs-on: ubuntu-latest
-    if: github.event.schedule == '0 2 */2 * *' || github.event_name == 'workflow_dispatch'
+    if: github.event.inputs.job_to_run == 'update-markets' || github.event_name == 'workflow_dispatch'
     
     steps:
     - name: Checkout repository

@@ -303,11 +303,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Polymarket scraper for Bitcoin hourly markets.")
     parser.add_argument('--update-markets', action='store_true', help='Only update the markets CSV and exit.')
     parser.add_argument('--multi-run', type=int, default=0, help='Run scraper multiple times with 1-minute intervals (e.g., --multi-run 5)')
+    parser.add_argument('--run-once', action='store_true', help='Run a single data collection and exit.')
     args = parser.parse_args()
 
     if args.update_markets:
         update_markets_csv()
     elif args.multi_run > 0:
         main_multi_run(args.multi_run)
+    elif args.run_once:
+        collect_data_once()
     else:
         main() 
