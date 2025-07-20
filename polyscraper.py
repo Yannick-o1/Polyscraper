@@ -227,18 +227,11 @@ def get_order_book(token_id):
         print(f"Error fetching order book for token {token_id}: {e}")
         return None, None
 
-def main():
-    """Main function to run the scraping loop."""
+def collect_data_once():
+    """Collect data for one minute and log it to CSV."""
     output_csv = 'btc_polydata.csv'
 
-    # Update the markets first
-    update_markets_csv()
-
-    print("\n--- Running Polymarket Scraper ---")
-    print(f"Data will be saved to {output_csv}")
-
     try:
-        # --- Start of the minute ---
         current_timestamp = datetime.now(UTC)
         
         token_id, market_name = get_current_market_token_id()
@@ -246,8 +239,6 @@ def main():
         if not token_id:
             print(f"({current_timestamp.strftime('%H:%M:%S')}) No active market found for the current hour.")
             return
-
-        print(f"\n--- Tracking market: {market_name} ---")
 
         best_bid, best_ask = get_order_book(token_id)
 
@@ -275,15 +266,50 @@ def main():
             print(f"({current_timestamp.strftime('%H:%M:%S')}) Could not retrieve valid order book for '{market_name}'")
 
     except Exception as e:
-        print(f"An unexpected error occurred in the main loop: {e}")
+        print(f"An unexpected error occurred during data collection: {e}")
+
+def main():
+    """Main function to run the scraping loop."""
+    output_csv = 'btc_polydata.csv'
+
+    # Update the markets first
+    update_markets_csv()
+
+    print("\n--- Running Polymarket Scraper ---")
+    print(f"Data will be saved to {output_csv}")
+
+    # Run data collection once
+    collect_data_once()
+
+def main_multi_run(num_runs=5):
+    """Run the scraper multiple times with 1-minute intervals."""
+    output_csv = 'btc_polydata.csv'
+
+    # Update the markets first (only once)
+    update_markets_csv()
+
+    print(f"\n--- Running Polymarket Scraper ({num_runs} runs with 1-minute intervals) ---")
+    print(f"Data will be saved to {output_csv}")
+
+    for i in range(num_runs):
+        print(f"\n--- Run {i+1}/{num_runs} ---")
+        collect_data_once()
+        
+        # Sleep for 60 seconds between runs (except after the last run)
+        if i < num_runs - 1:
+            print(f"Waiting 60 seconds until next run...")
+            time.sleep(60)
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Polymarket scraper for Bitcoin hourly markets.")
     parser.add_argument('--update-markets', action='store_true', help='Only update the markets CSV and exit.')
+    parser.add_argument('--multi-run', type=int, default=0, help='Run scraper multiple times with 1-minute intervals (e.g., --multi-run 5)')
     args = parser.parse_args()
 
     if args.update_markets:
         update_markets_csv()
+    elif args.multi_run > 0:
+        main_multi_run(args.multi_run)
     else:
         main() 

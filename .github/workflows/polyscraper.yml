@@ -2,7 +2,7 @@ name: Polymarket Scraper
 
 on:
   schedule:
-    # Run data collection every 5 minutes (GitHub Actions minimum)
+    # Run data collection every 5 minutes (each run collects 5 data points)
     - cron: '*/5 * * * *'
     # Update markets every 2 days (48 hours - closest to your 50 hour requirement)
     - cron: '0 2 */2 * *'
@@ -29,8 +29,8 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Run scraper (data collection)
-      run: python polyscraper.py
+    - name: Run scraper (data collection - 5 runs with 1-minute intervals)
+      run: python polyscraper.py --multi-run 5
 
     - name: Commit and push changes
       run: |
