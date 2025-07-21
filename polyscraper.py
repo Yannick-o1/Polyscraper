@@ -224,7 +224,7 @@ def get_market_token_id_for_hour(target_hour_dt_utc):
         return None, None
 
 def check_and_update_outcome(current_time_utc):
-    """At the top of the hour, check Binance prices to determine the previous hour's market outcome."""
+    """At the top of the hour, check the DB to determine the previous hour's market outcome."""
     if current_time_utc.minute != 0:
         return # Only run this logic at the top of the hour (e.g., 16:00)
 
@@ -234,20 +234,41 @@ def check_and_update_outcome(current_time_utc):
     previous_hour_end_utc = current_time_utc.replace(minute=0, second=0, microsecond=0)
     previous_hour_start_utc = previous_hour_end_utc - timedelta(hours=1)
     
-    # Get the opening price at the start of the last hour
-    p_start = get_p_start_from_binance(previous_hour_start_utc)
-    # Get the opening price at the start of the current hour (which is the end price of the last hour)
-    p_end = get_p_start_from_binance(previous_hour_end_utc)
-
+    p_start = None
+    p_end = None
     outcome = None
-    if p_start is not None and p_end is not None:
-        if p_end > p_start:
-            outcome = "UP"
-        elif p_end < p_start:
-            outcome = "DOWN"
-        else:
-            outcome = "FLAT" # Handle the rare case of no price change
+
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+
+        # Get the first price at or after the start of the hour
+        cursor.execute("SELECT btc_usdt_spot FROM polydata WHERE timestamp >= ? ORDER BY timestamp ASC LIMIT 1", 
+                       (previous_hour_start_utc.strftime('%Y-%m-%d %H:%M:%S'),))
+        start_result = cursor.fetchone()
+        if start_result:
+            p_start = start_result[0]
+
+        # Get the last price just before the end of the hour
+        cursor.execute("SELECT btc_usdt_spot FROM polydata WHERE timestamp < ? ORDER BY timestamp DESC LIMIT 1", 
+                       (previous_hour_end_utc.strftime('%Y-%m-%d %H:%M:%S'),))
+        end_result = cursor.fetchone()
+        if end_result:
+            p_end = end_result[0]
+
+        conn.close()
+
+        if p_start is not None and p_end is not None:
+            if p_end > p_start:
+                outcome = "UP"
+            elif p_end < p_start:
+                outcome = "DOWN"
+            else:
+                outcome = "FLAT" # Handle the rare case of no price change
     
+    except Exception as e:
+        print(f"Error checking outcome from database: {e}")
+
     if outcome:
         # Get the market name for logging purposes
         _, market_name = get_market_token_id_for_hour(previous_hour_start_utc)
