@@ -193,7 +193,7 @@ def get_market_token_id_for_hour(target_hour_dt_utc):
 
 def check_and_update_outcome(current_time_utc):
     """At one minute past the hour, check and update the previous hour's market outcome."""
-    if current_time_utc.minute != 24:
+    if current_time_utc.minute != 30:
         return # Only run this logic at one minute past the hour
 
     print(f"({current_time_utc.strftime('%H:%M:%S')}) Checking outcome for previous hour...")
@@ -213,10 +213,15 @@ def check_and_update_outcome(current_time_utc):
     outcome = None
     try:
         # The token_id is one of two tokens. We need the market's condition_id.
-        # A simple way to get it is to look it up in the markets CSV.
+        # We will look it up in the markets CSV using the unique market_name.
         markets_df = pd.read_csv(MARKETS_CSV_FILE)
-        market_row = markets_df[markets_df['token_id'] == int(token_id)].iloc[0]
-        condition_id = market_row['condition_id']
+        market_row = markets_df[markets_df['market_name'] == market_name]
+        
+        if market_row.empty:
+            print(f"Could not find market_name '{market_name}' in CSV.")
+            return
+
+        condition_id = market_row.iloc[0]['condition_id']
 
         market_resp = requests.get(f"{CLOB_API_URL}/markets/{condition_id}")
         market_resp.raise_for_status()
