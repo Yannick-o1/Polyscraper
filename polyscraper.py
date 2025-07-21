@@ -420,28 +420,44 @@ def get_current_market_token_id():
     return get_market_token_id_for_hour(current_hour_utc)
 
 def get_order_book(token_id):
-    """Get the current order book for a given token ID"""
+    """
+    Get the current order book for a given token ID.
+    If the order book is thin or empty, fall back to fetching the last trade price.
+    """
     try:
-        response = requests.get("https://clob.polymarket.com/book", params={"token_id": token_id})
+        # First, try to get the full order book
+        response = requests.get(f"{CLOB_API_URL}/book", params={"token_id": token_id})
         response.raise_for_status()
         
         data = response.json()
         bids = data.get('bids', [])
         asks = data.get('asks', [])
         
-        if not bids or not asks:
-            return None, None
+        if bids and asks:
+            # Parse bids and asks, sort them, and return the best
+            parsed_bids = [(float(b['price']), float(b['size'])) for b in bids]
+            parsed_asks = [(float(a['price']), float(a['size'])) for a in asks]
+            parsed_bids.sort(reverse=True)
+            parsed_asks.sort()
+            return parsed_bids[0], parsed_asks[0]
+
+        # --- Fallback Logic ---
+        # If order book is incomplete, fetch the last trade price
+        print(f"Incomplete order book for token {token_id}. Falling back to last price.")
+        price_response = requests.get(f"{CLOB_API_URL}/price", params={"token_id": token_id})
+        price_response.raise_for_status()
+        price_data = price_response.json()
+        last_price = float(price_data.get('price'))
+
+        if last_price is not None:
+            # Return a synthetic order book entry using the last price
+            # We use a size of 0 as it's not a real, fillable order
+            return (last_price, 0.0), (last_price, 0.0)
         
-        # Parse bids and asks, sort them, and return the best (highest bid, lowest ask)
-        parsed_bids = [(float(b['price']), float(b['size'])) for b in bids]
-        parsed_asks = [(float(a['price']), float(a['size'])) for a in asks]
-        parsed_bids.sort(reverse=True)
-        parsed_asks.sort()
-        
-        return parsed_bids[0], parsed_asks[0]
+        return None, None
         
     except Exception as e:
-        print(f"Error fetching order book for token {token_id}: {e}")
+        print(f"Error fetching order data for token {token_id}: {e}")
         return None, None
 
 def collect_data_once():
@@ -489,40 +505,41 @@ def collect_data_once():
         t2 = datetime.now(UTC)
         print(f"({t2.strftime('%H:%M:%S.%f')}) Got order book. API call took: {(t2-t1).total_seconds():.4f}s")
 
-        # Gracefully handle empty order books, which occur near market resolution
-        best_bid_price = best_bid[0] if best_bid else None
-        best_ask_price = best_ask[0] if best_ask else None
+        if best_bid and best_ask:
+            best_bid_price = best_bid[0]
+            best_ask_price = best_ask[0]
 
-        data_row = {
-            'timestamp': t0.strftime('%Y-%m-%d %H:%M:%S'),
-            'market_name': market_name,
-            'btc_usdt_spot': btc_price,
-            'ofi': ofi,
-            'p_up_prediction': p_up_prediction,
-            'token_id': token_id,
-            'best_bid': best_bid_price,
-            'best_ask': best_ask_price
-        }
+            data_row = {
+                'timestamp': t0.strftime('%Y-%m-%d %H:%M:%S'),
+                'market_name': market_name,
+                'btc_usdt_spot': btc_price,
+                'ofi': ofi,
+                'p_up_prediction': p_up_prediction,
+                'token_id': token_id,
+                'best_bid': best_bid_price,
+                'best_ask': best_ask_price
+            }
 
-        # Ensure the database and table exist, then insert the new row
-        init_database()
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO polydata (timestamp, market_name, token_id, best_bid, best_ask, btc_usdt_spot, ofi, p_up_prediction)
-            VALUES (:timestamp, :market_name, :token_id, :best_bid, :best_ask, :btc_usdt_spot, :ofi, :p_up_prediction)
-        ''', data_row)
-        conn.commit()
-        conn.close()
+            # Ensure the database and table exist, then insert the new row
+            init_database()
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO polydata (timestamp, market_name, token_id, best_bid, best_ask, btc_usdt_spot, ofi, p_up_prediction)
+                VALUES (:timestamp, :market_name, :token_id, :best_bid, :best_ask, :btc_usdt_spot, :ofi, :p_up_prediction)
+            ''', data_row)
+            conn.commit()
+            conn.close()
 
-        t3 = datetime.now(UTC)
-        btc_price_str = f"{btc_price:.2f}" if btc_price is not None else "N/A"
-        ofi_str = f"{ofi:.4f}" if ofi is not None else "N/A"
-        prediction_str = f"{p_up_prediction:.4f}" if p_up_prediction is not None else "N/A"
-        bid_str = f"{best_bid_price:.2f}" if best_bid_price is not None else "N/A"
-        ask_str = f"{best_ask_price:.2f}" if best_ask_price is not None else "N/A"
-        print(f"({t3.strftime('%H:%M:%S.%f')}) Logged to DB: BTC={btc_price_str}, OFI={ofi_str}, P(Up)={prediction_str}, Bid={bid_str}, Ask={ask_str} for '{market_name}'")
-        print(f"({t3.strftime('%H:%M:%S.%f')}) --- Total run time: {(t3-t0).total_seconds():.4f}s ---")
+            t3 = datetime.now(UTC)
+            btc_price_str = f"{btc_price:.2f}" if btc_price is not None else "N/A"
+            ofi_str = f"{ofi:.4f}" if ofi is not None else "N/A"
+            prediction_str = f"{p_up_prediction:.4f}" if p_up_prediction is not None else "N/A"
+            print(f"({t3.strftime('%H:%M:%S.%f')}) Logged to DB: BTC={btc_price_str}, OFI={ofi_str}, P(Up)={prediction_str}, Bid={best_bid_price:.2f}, Ask={best_ask_price:.2f} for '{market_name}'")
+            print(f"({t3.strftime('%H:%M:%S.%f')}) --- Total run time: {(t3-t0).total_seconds():.4f}s ---")
+
+        else:
+            print(f"({datetime.now(UTC).strftime('%H:%M:%S.%f')}) Could not retrieve valid order book for '{market_name}'")
 
     except Exception as e:
         print(f"An unexpected error occurred during data collection: {e}")
