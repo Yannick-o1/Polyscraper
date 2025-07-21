@@ -14,7 +14,7 @@ on:
 
 jobs:
   scrape-data:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     if: github.event.inputs.job_to_run == 'scrape-data'
     
     steps:
@@ -46,7 +46,7 @@ jobs:
         git push
 
   update-markets:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     if: github.event.inputs.job_to_run == 'update-markets'
     
     steps:
