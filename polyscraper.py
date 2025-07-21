@@ -470,11 +470,12 @@ def get_current_market_token_id():
 def get_order_book(token_id):
     """
     Get the current order book for a given token ID.
-    If the order book is thin or empty, fall back to fetching the last trade price.
+    If the order book is thin or empty, it uses a fallback to the last recorded 
+    price in our own database to infer the outcome.
     """
     try:
         # First, try to get the full order book
-        response = requests.get(f"{CLOB_API_URL}/book", params={"token_id": token_id})
+        response = requests.get(f"{CLOB_API_URL}/book", params={"token_id": token_id}, timeout=5)
         response.raise_for_status()
         
         data = response.json()
@@ -482,7 +483,7 @@ def get_order_book(token_id):
         asks = data.get('asks', [])
         
         if bids and asks:
-            # Parse bids and asks, sort them, and return the best
+            # Happy path: parse bids and asks, sort them, and return the best
             parsed_bids = [(float(b['price']), float(b['size'])) for b in bids]
             parsed_asks = [(float(a['price']), float(a['size'])) for a in asks]
             parsed_bids.sort(reverse=True)
@@ -490,18 +491,38 @@ def get_order_book(token_id):
             return parsed_bids[0], parsed_asks[0]
 
         # --- Fallback Logic ---
-        # If order book is incomplete, fetch the last trade price
-        print(f"Incomplete order book for token {token_id}. Falling back to last price.")
-        price_response = requests.get(f"{CLOB_API_URL}/price", params={"token_id": token_id})
-        price_response.raise_for_status()
-        price_data = price_response.json()
-        last_price = float(price_data.get('price'))
-
-        if last_price is not None:
-            # Return a synthetic order book entry using the last price
-            # We use a size of 0 as it's not a real, fillable order
-            return (last_price, 0.0), (last_price, 0.0)
+        print(f"Incomplete order book for token {token_id}. Falling back to local database.")
+        conn = None
+        try:
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT best_bid, best_ask FROM polydata WHERE token_id = ? ORDER BY timestamp DESC LIMIT 1",
+                (token_id,)
+            )
+            last_reading = cursor.fetchone()
+            
+            if last_reading and last_reading[0] is not None and last_reading[1] is not None:
+                last_bid, last_ask = last_reading
+                last_midpoint = (last_bid + last_ask) / 2
+                print(f"Fallback SUCCESS: Last DB midpoint was {last_midpoint:.4f}.")
+                
+                if last_midpoint > 0.5:
+                    print("  -> Assuming market resolves UP. Setting price to 1.0.")
+                    return (1.0, 0.0), (1.0, 0.0)
+                else:
+                    print("  -> Assuming market resolves DOWN. Setting price to 0.0.")
+                    return (0.0, 0.0), (0.0, 0.0)
+            else:
+                print(f"Fallback FAILED: No valid previous data in DB for token {token_id}.")
+                
+        except sqlite3.Error as db_e:
+            print(f"Fallback FAILED: Database error: {db_e}")
+        finally:
+            if conn:
+                conn.close()
         
+        print("Fallback failed. Cannot determine price.")
         return None, None
         
     except Exception as e:
