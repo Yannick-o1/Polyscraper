@@ -271,7 +271,7 @@ def collect_data_once():
             best_ask_price = best_ask[0]
 
             data_row = {
-                'timestamp': current_timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+                'timestamp': t0.strftime('%Y-%m-%d %H:%M:%S'),
                 'market_name': market_name,
                 'token_id': token_id,
                 'best_bid': best_bid_price,
