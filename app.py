@@ -18,9 +18,9 @@ def run_scraper():
     try:
         # Use subprocess.Popen to run the script in the background
         # This ensures the web server can respond immediately without waiting for the scraper
-        # We also need to specify the python executable to use.
-        # Assuming 'python3' is in the system's PATH on the AWS runner.
-        subprocess.Popen(['python3', SCRAPER_SCRIPT_PATH, '--run-once'])
+        # We also need to specify the python executable from our virtual environment.
+        python_executable = os.path.join(BASE_DIR, 'venv/bin/python')
+        subprocess.Popen([python_executable, SCRAPER_SCRIPT_PATH, '--run-once'])
         
         return jsonify({"status": "success", "message": "Scraper job initiated."}), 202
     except Exception as e:
