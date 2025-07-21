@@ -249,15 +249,22 @@ def get_order_book(token_id):
 def collect_data_once():
     """Collect data for one minute and log it to the SQLite database."""
     try:
-        current_timestamp = datetime.now(UTC)
+        t0 = datetime.now(UTC)
+        print(f"({t0.strftime('%H:%M:%S.%f')}) --- Starting run ---")
         
         token_id, market_name = get_current_market_token_id()
 
+        t1 = datetime.now(UTC)
+        print(f"({t1.strftime('%H:%M:%S.%f')}) Found token ID. Elapsed: {(t1-t0).total_seconds():.4f}s")
+
         if not token_id:
-            print(f"({current_timestamp.strftime('%H:%M:%S')}) No active market found for the current hour.")
+            print(f"({datetime.now(UTC).strftime('%H:%M:%S.%f')}) No active market found for the current hour.")
             return
 
         best_bid, best_ask = get_order_book(token_id)
+
+        t2 = datetime.now(UTC)
+        print(f"({t2.strftime('%H:%M:%S.%f')}) Got order book. API call took: {(t2-t1).total_seconds():.4f}s")
 
         if best_bid and best_ask:
             best_bid_price = best_bid[0]
@@ -282,9 +289,12 @@ def collect_data_once():
             conn.commit()
             conn.close()
 
-            print(f"({data_row['timestamp']}) Logged to DB: Bid={best_bid_price:.2f}, Ask={best_ask_price:.2f} for '{market_name}'")
+            t3 = datetime.now(UTC)
+            print(f"({t3.strftime('%H:%M:%S.%f')}) Logged to DB. DB write took: {(t3-t2).total_seconds():.4f}s")
+            print(f"({t3.strftime('%H:%M:%S.%f')}) --- Total run time: {(t3-t0).total_seconds():.4f}s ---")
+
         else:
-            print(f"({current_timestamp.strftime('%H:%M:%S')}) Could not retrieve valid order book for '{market_name}'")
+            print(f"({datetime.now(UTC).strftime('%H:%M:%S.%f')}) Could not retrieve valid order book for '{market_name}'")
 
     except Exception as e:
         print(f"An unexpected error occurred during data collection: {e}")
