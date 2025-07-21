@@ -12,21 +12,39 @@ CLOB_API_URL = "https://clob.polymarket.com"
 MARKETS_CSV_FILE = "btc_polymarkets.csv"
 DB_FILE = "polyscraper.db"
 
-def get_binance_btc_price():
-    """Fetches the current BTC/USDT spot price from Binance."""
-    url = "https://api.binance.com/api/v3/ticker/price"
-    params = {"symbol": "BTCUSDT"}
+def get_binance_data_and_ofi():
+    """Fetch live BTC/USDT price and calculate order flow imbalance from recent trades."""
     try:
-        response = requests.get(url, params=params, timeout=5)
-        response.raise_for_status()
-        data = response.json()
-        return float(data['price'])
-    except requests.RequestException as e:
-        print(f"Error fetching Binance price: {e}")
-        return None
-    except (KeyError, ValueError) as e:
-        print(f"Error parsing Binance price data: {e}")
-        return None
+        # Fetch the last 1000 trades to ensure we have recent data
+        resp = requests.get("https://api.binance.com/api/v3/trades", 
+                           params={"symbol": "BTCUSDT", "limit": 1000}, timeout=5)
+        resp.raise_for_status()
+        trades = resp.json()
+        
+        if not trades:
+            # Fallback to ticker price if no trades are returned
+            price_resp = requests.get("https://api.binance.com/api/v3/ticker/price", params={"symbol": "BTCUSDT"})
+            price_resp.raise_for_status()
+            latest_price = float(price_resp.json()['price'])
+            return latest_price, 0.0
+
+        # Create a DataFrame from the trades
+        df = pd.DataFrame(trades)
+        latest_price = float(df.iloc[-1]["price"])
+        df["qty"] = df["qty"].astype(float)
+        
+        # In Binance trade data, isBuyerMaker=False means the taker was a buyer (a market buy)
+        buy_vol = df[~df["isBuyerMaker"]]["qty"].sum()
+        sell_vol = df[df["isBuyerMaker"]]["qty"].sum()
+        
+        total_vol = buy_vol + sell_vol
+        ofi = (buy_vol - sell_vol) / total_vol if total_vol > 0 else 0.0
+        
+        return latest_price, ofi
+        
+    except Exception as e:
+        print(f"\nError getting live Bitcoin data: {e}")
+        return None, None
 
 def init_database():
     """Initializes the database and creates/updates the table if needed."""
@@ -48,6 +66,8 @@ def init_database():
     columns = [column[1] for column in cursor.fetchall()]
     if 'btc_usdt_spot' not in columns:
         cursor.execute("ALTER TABLE polydata ADD COLUMN btc_usdt_spot REAL")
+    if 'ofi' not in columns:
+        cursor.execute("ALTER TABLE polydata ADD COLUMN ofi REAL")
 
     conn.commit()
     conn.close()
@@ -275,8 +295,8 @@ def collect_data_once():
         t0 = datetime.now(UTC)
         print(f"({t0.strftime('%H:%M:%S.%f')}) --- Starting run ---")
         
-        # Fetch the BTC spot price from Binance first
-        btc_price = get_binance_btc_price()
+        # Fetch the BTC spot price and OFI from Binance first
+        btc_price, ofi = get_binance_data_and_ofi()
         
         token_id, market_name = get_current_market_token_id()
 
@@ -300,6 +320,7 @@ def collect_data_once():
                 'timestamp': t0.strftime('%Y-%m-%d %H:%M:%S'),
                 'market_name': market_name,
                 'btc_usdt_spot': btc_price,
+                'ofi': ofi,
                 'token_id': token_id,
                 'best_bid': best_bid_price,
                 'best_ask': best_ask_price
@@ -310,15 +331,16 @@ def collect_data_once():
             conn = sqlite3.connect(DB_FILE)
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO polydata (timestamp, market_name, token_id, best_bid, best_ask, btc_usdt_spot)
-                VALUES (:timestamp, :market_name, :token_id, :best_bid, :best_ask, :btc_usdt_spot)
+                INSERT INTO polydata (timestamp, market_name, token_id, best_bid, best_ask, btc_usdt_spot, ofi)
+                VALUES (:timestamp, :market_name, :token_id, :best_bid, :best_ask, :btc_usdt_spot, :ofi)
             ''', data_row)
             conn.commit()
             conn.close()
 
             t3 = datetime.now(UTC)
             btc_price_str = f"{btc_price:.2f}" if btc_price is not None else "N/A"
-            print(f"({t3.strftime('%H:%M:%S.%f')}) Logged to DB: BTC={btc_price_str}, Bid={best_bid_price:.2f}, Ask={best_ask_price:.2f} for '{market_name}'")
+            ofi_str = f"{ofi:.4f}" if ofi is not None else "N/A"
+            print(f"({t3.strftime('%H:%M:%S.%f')}) Logged to DB: BTC={btc_price_str}, OFI={ofi_str}, Bid={best_bid_price:.2f}, Ask={best_ask_price:.2f} for '{market_name}'")
             print(f"({t3.strftime('%H:%M:%S.%f')}) --- Total run time: {(t3-t0).total_seconds():.4f}s ---")
 
         else:

@@ -37,6 +37,7 @@ DATA_VIEWER_TEMPLATE = """
                 <th>Timestamp (UTC)</th>
                 <th>Market Name</th>
                 <th>BTC Spot (USDT)</th>
+                <th>OFI</th>
                 <th>Best Bid</th>
                 <th>Best Ask</th>
             </tr>
@@ -47,6 +48,7 @@ DATA_VIEWER_TEMPLATE = """
                 <td>{{ row.timestamp }}</td>
                 <td>{{ row.market_name }}</td>
                 <td>{{ "%.2f"|format(row.btc_usdt_spot) if row.btc_usdt_spot is not none else 'N/A' }}</td>
+                <td>{{ "%.4f"|format(row.ofi) if row.ofi is not none else 'N/A' }}</td>
                 <td>{{ row.best_bid }}</td>
                 <td>{{ row.best_ask }}</td>
             </tr>
@@ -84,7 +86,7 @@ def view_data():
         cursor = conn.cursor()
         
         # Fetch the last 50 records, ordered by timestamp descending
-        cursor.execute("SELECT timestamp, market_name, best_bid, best_ask, btc_usdt_spot FROM polydata ORDER BY timestamp DESC LIMIT 50")
+        cursor.execute("SELECT timestamp, market_name, best_bid, best_ask, btc_usdt_spot, ofi FROM polydata ORDER BY timestamp DESC LIMIT 50")
         data = cursor.fetchall()
         
         conn.close()
