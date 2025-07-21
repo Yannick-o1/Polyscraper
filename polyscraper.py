@@ -2,8 +2,6 @@ import requests
 import pandas as pd
 from datetime import datetime, UTC, timedelta
 from zoneinfo import ZoneInfo
-import time
-import os
 import re
 import csv
 import sqlite3
@@ -573,49 +571,19 @@ def collect_data_once():
     except Exception as e:
         print(f"An unexpected error occurred during data collection: {e}")
 
-def main():
-    """Main function to run the scraping loop."""
-    output_csv = 'btc_polydata.csv'
-
-    # Update the markets first
-    update_markets_csv()
-
-    print("\n--- Running Polymarket Scraper ---")
-    print(f"Data will be saved to {output_csv}")
-
-    # Run data collection once
-    collect_data_once()
-
-def main_multi_run(num_runs=5):
-    """Run the scraper multiple times with 1-minute intervals - ONLY collects bid/ask data."""
-    output_csv = 'btc_polydata.csv'
-
-    print(f"\n--- Running Polymarket Scraper ({num_runs} runs with 1-minute intervals) ---")
-    print(f"Data will be saved to {output_csv}")
-    print("*** NOT updating markets - just collecting bid/ask data ***")
-
-    for i in range(num_runs):
-        print(f"\n--- Run {i+1}/{num_runs} ---")
-        collect_data_once()
-        
-        # Sleep for 60 seconds between runs (except after the last run)
-        if i < num_runs - 1:
-            print(f"Waiting 60 seconds until next run...")
-            time.sleep(60)
-
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Polymarket scraper for Bitcoin hourly markets.")
+    parser = argparse.ArgumentParser(
+        description="Polymarket scraper for Bitcoin hourly markets.",
+        epilog="Default action is to do nothing. Use --run-once to collect data or --update-markets to refresh the market list."
+    )
     parser.add_argument('--update-markets', action='store_true', help='Only update the markets CSV and exit.')
-    parser.add_argument('--multi-run', type=int, default=0, help='Run scraper multiple times with 1-minute intervals (e.g., --multi-run 5)')
     parser.add_argument('--run-once', action='store_true', help='Run a single data collection and exit.')
     args = parser.parse_args()
 
     if args.update_markets:
         update_markets_csv()
-    elif args.multi_run > 0:
-        main_multi_run(args.multi_run)
     elif args.run_once:
         collect_data_once()
     else:
-        main() 
+        parser.print_help() 
