@@ -80,8 +80,8 @@ def calculate_live_prediction(bitcoin_df, current_timestamp, current_ofi):
             return None
         
         # Find the start of the current hour from the data
-        # Localize current_timestamp to UTC to match the dataframe's index
-        current_hour = pd.to_datetime(current_timestamp).tz_localize('UTC').replace(minute=0, second=0, microsecond=0)
+        # current_timestamp is already tz-aware, so we just need to truncate it
+        current_hour = pd.to_datetime(current_timestamp).replace(minute=0, second=0, microsecond=0)
         hour_data = df[df.index >= current_hour]
         
         if hour_data.empty:
