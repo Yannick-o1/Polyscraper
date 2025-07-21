@@ -193,7 +193,7 @@ def get_market_token_id_for_hour(target_hour_dt_utc):
 
 def check_and_update_outcome(current_time_utc):
     """At one minute past the hour, check and update the previous hour's market outcome."""
-    if current_time_utc.minute != 1:
+    if current_time_utc.minute != 16:
         return # Only run this logic at one minute past the hour
 
     print(f"({current_time_utc.strftime('%H:%M:%S')}) Checking outcome for previous hour...")
