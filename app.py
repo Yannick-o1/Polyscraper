@@ -50,9 +50,9 @@ DATA_VIEWER_TEMPLATE = """
                 <td>{{ row.market_name }}</td>
                 <td>{{ "%.2f"|format(row.btc_usdt_spot) if row.btc_usdt_spot is not none else 'N/A' }}</td>
                 <td>{{ "%.4f"|format(row.ofi) if row.ofi is not none else 'N/A' }}</td>
-                <td>{{ "%.4f"|format(row.p_up_prediction) if row.p_up_prediction is not none else 'N/A' }}</td>
-                <td>{{ row.best_bid }}</td>
-                <td>{{ row.best_ask }}</td>
+                <td>{{ "%.2f%%"|format(row.p_up_prediction * 100) if row.p_up_prediction is not none else 'N/A' }}</td>
+                <td>{{ "%.0f%%"|format(row.best_bid * 100) if row.best_bid is not none else 'N/A' }}</td>
+                <td>{{ "%.0f%%"|format(row.best_ask * 100) if row.best_ask is not none else 'N/A' }}</td>
             </tr>
             {% endfor %}
         </tbody>
