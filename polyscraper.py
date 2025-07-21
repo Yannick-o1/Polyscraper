@@ -489,41 +489,40 @@ def collect_data_once():
         t2 = datetime.now(UTC)
         print(f"({t2.strftime('%H:%M:%S.%f')}) Got order book. API call took: {(t2-t1).total_seconds():.4f}s")
 
-        if best_bid and best_ask:
-            best_bid_price = best_bid[0]
-            best_ask_price = best_ask[0]
+        # Gracefully handle empty order books, which occur near market resolution
+        best_bid_price = best_bid[0] if best_bid else None
+        best_ask_price = best_ask[0] if best_ask else None
 
-            data_row = {
-                'timestamp': t0.strftime('%Y-%m-%d %H:%M:%S'),
-                'market_name': market_name,
-                'btc_usdt_spot': btc_price,
-                'ofi': ofi,
-                'p_up_prediction': p_up_prediction,
-                'token_id': token_id,
-                'best_bid': best_bid_price,
-                'best_ask': best_ask_price
-            }
+        data_row = {
+            'timestamp': t0.strftime('%Y-%m-%d %H:%M:%S'),
+            'market_name': market_name,
+            'btc_usdt_spot': btc_price,
+            'ofi': ofi,
+            'p_up_prediction': p_up_prediction,
+            'token_id': token_id,
+            'best_bid': best_bid_price,
+            'best_ask': best_ask_price
+        }
 
-            # Ensure the database and table exist, then insert the new row
-            init_database()
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO polydata (timestamp, market_name, token_id, best_bid, best_ask, btc_usdt_spot, ofi, p_up_prediction)
-                VALUES (:timestamp, :market_name, :token_id, :best_bid, :best_ask, :btc_usdt_spot, :ofi, :p_up_prediction)
-            ''', data_row)
-            conn.commit()
-            conn.close()
+        # Ensure the database and table exist, then insert the new row
+        init_database()
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO polydata (timestamp, market_name, token_id, best_bid, best_ask, btc_usdt_spot, ofi, p_up_prediction)
+            VALUES (:timestamp, :market_name, :token_id, :best_bid, :best_ask, :btc_usdt_spot, :ofi, :p_up_prediction)
+        ''', data_row)
+        conn.commit()
+        conn.close()
 
-            t3 = datetime.now(UTC)
-            btc_price_str = f"{btc_price:.2f}" if btc_price is not None else "N/A"
-            ofi_str = f"{ofi:.4f}" if ofi is not None else "N/A"
-            prediction_str = f"{p_up_prediction:.4f}" if p_up_prediction is not None else "N/A"
-            print(f"({t3.strftime('%H:%M:%S.%f')}) Logged to DB: BTC={btc_price_str}, OFI={ofi_str}, P(Up)={prediction_str}, Bid={best_bid_price:.2f}, Ask={best_ask_price:.2f} for '{market_name}'")
-            print(f"({t3.strftime('%H:%M:%S.%f')}) --- Total run time: {(t3-t0).total_seconds():.4f}s ---")
-
-        else:
-            print(f"({datetime.now(UTC).strftime('%H:%M:%S.%f')}) Could not retrieve valid order book for '{market_name}'")
+        t3 = datetime.now(UTC)
+        btc_price_str = f"{btc_price:.2f}" if btc_price is not None else "N/A"
+        ofi_str = f"{ofi:.4f}" if ofi is not None else "N/A"
+        prediction_str = f"{p_up_prediction:.4f}" if p_up_prediction is not None else "N/A"
+        bid_str = f"{best_bid_price:.2f}" if best_bid_price is not None else "N/A"
+        ask_str = f"{best_ask_price:.2f}" if best_ask_price is not None else "N/A"
+        print(f"({t3.strftime('%H:%M:%S.%f')}) Logged to DB: BTC={btc_price_str}, OFI={ofi_str}, P(Up)={prediction_str}, Bid={bid_str}, Ask={ask_str} for '{market_name}'")
+        print(f"({t3.strftime('%H:%M:%S.%f')}) --- Total run time: {(t3-t0).total_seconds():.4f}s ---")
 
     except Exception as e:
         print(f"An unexpected error occurred during data collection: {e}")
