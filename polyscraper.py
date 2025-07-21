@@ -24,32 +24,6 @@ except lgb.LGBMError as e:
     print("Predictions will be disabled.")
     model = None
 
-def get_binance_hourly_open(timestamp):
-    """Gets the open price for the candle corresponding to the given timestamp from Binance."""
-    try:
-        # Binance uses milliseconds since epoch for timestamps
-        start_of_hour_ms = int(timestamp.replace(minute=0, second=0, microsecond=0).timestamp() * 1000)
-        
-        url = "https://api.binance.com/api/v3/klines"
-        params = {
-            "symbol": "BTCUSDT",
-            "interval": "1h",
-            "startTime": start_of_hour_ms,
-            "limit": 1
-        }
-        
-        resp = requests.get(url, params=params, timeout=5)
-        resp.raise_for_status()
-        kline_data = resp.json()
-        
-        if kline_data:
-            return float(kline_data[0][1]) # Index 1 is the 'Open' price
-        return None
-        
-    except Exception as e:
-        print(f"\nError getting Binance hourly open: {e}")
-        return None
-
 def get_binance_data_and_ofi():
     """Fetch live BTC/USDT price and calculate order flow imbalance from recent trades."""
     try:
@@ -87,18 +61,34 @@ def get_binance_data_and_ofi():
 def calculate_live_prediction(bitcoin_df, current_timestamp, current_ofi):
     """Calculate prediction using live data instead of historical lookup"""
     try:
-        # The dataframe passed in contains the most recent data point already
-        if len(bitcoin_df) < 2:
+        if len(bitcoin_df) < 2:  # Need at least 2 data points for volatility
+            return None
+            
+        df = bitcoin_df.copy()
+        
+        # Ensure 'timestamp' is the index and it's a datetime object
+        if 'timestamp' in df.columns:
+            # Tell pandas to interpret the timestamps as UTC
+            df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
+            df = df.set_index('timestamp')
+        
+        df = df.sort_index()
+        
+        # Remove rows with missing prices
+        df = df.dropna(subset=['btc_usdt_spot'])
+        if len(df) < 2:
             return None
         
-        # Get the opening price for the current hour directly from Binance for accuracy
-        p_start = get_binance_hourly_open(current_timestamp)
-        if p_start is None:
-            print("Could not get hourly open price from Binance. Skipping prediction.")
+        # Find the start of the current hour from the data
+        # current_timestamp is already tz-aware, so we just need to truncate it
+        current_hour = pd.to_datetime(current_timestamp).replace(minute=0, second=0, microsecond=0)
+        hour_data = df[df.index >= current_hour]
+        
+        if hour_data.empty:
             return None
-
-        # The most recent price is the last one in our dataframe
-        current_price = bitcoin_df['btc_usdt_spot'].iloc[-1]
+            
+        p_start = hour_data['btc_usdt_spot'].iloc[0]
+        current_price = df['btc_usdt_spot'].iloc[-1]
         
         r = current_price / p_start - 1
         
@@ -108,13 +98,12 @@ def calculate_live_prediction(bitcoin_df, current_timestamp, current_ofi):
         if tau <= 0:
             tau = 0.01
         
-        # Calculate 20-minute rolling volatility using our collected data
-        df_for_vol = bitcoin_df.copy()
-        df_for_vol['lret'] = np.log(df_for_vol['btc_usdt_spot']).diff()
-        vol_window = min(20, len(df_for_vol) - 1)
+        # Calculate 20-minute rolling volatility
+        df['lret'] = np.log(df['btc_usdt_spot']).diff()
+        vol_window = min(20, len(df) - 1)
         
         if vol_window > 0:
-            recent_returns = df_for_vol['lret'].tail(vol_window)
+            recent_returns = df['lret'].tail(vol_window)
             vol = recent_returns.std() * np.sqrt(60)
         else:
             vol = 0.0
@@ -402,13 +391,13 @@ def collect_data_once():
                 f"SELECT timestamp, btc_usdt_spot FROM polydata WHERE timestamp >= '{thirty_mins_ago}'", conn)
             conn.close()
             
-            # Create a dataframe for the current observation
-            current_data_df = pd.DataFrame([{'timestamp': t0, 'btc_usdt_spot': btc_price}])
-
-            # Combine historical data with the current observation for a complete picture
-            combined_df = pd.concat([historical_df, current_data_df], ignore_index=True)
-
-            p_up_prediction = calculate_live_prediction(combined_df, t0, ofi)
+            # Append current price to historical data to get the most up-to-date features
+            if not historical_df.empty:
+                # Convert t0 to a string to match the text format from the database
+                t0_str = t0.strftime('%Y-%m-%d %H:%M:%S')
+                current_data_df = pd.DataFrame([{'timestamp': t0_str, 'btc_usdt_spot': btc_price}])
+                combined_df = pd.concat([historical_df, current_data_df], ignore_index=True)
+                p_up_prediction = calculate_live_prediction(combined_df, t0, ofi)
         # --- End Prediction Logic ---
 
         token_id, market_name = get_current_market_token_id()
