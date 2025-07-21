@@ -7,10 +7,22 @@ import os
 import re
 import csv
 import sqlite3
+import lightgbm as lgb
+import numpy as np
 
+# --- Globals ---
 CLOB_API_URL = "https://clob.polymarket.com"
 MARKETS_CSV_FILE = "btc_polymarkets.csv"
 DB_FILE = "polyscraper.db"
+MODEL_FILE = "btc_lgbm.txt"
+
+# Load the LightGBM model once when the script starts
+try:
+    model = lgb.Booster(model_file=MODEL_FILE)
+except lgb.LGBMError as e:
+    print(f"Error loading model file '{MODEL_FILE}': {e}")
+    print("Predictions will be disabled.")
+    model = None
 
 def get_binance_data_and_ofi():
     """Fetch live BTC/USDT price and calculate order flow imbalance from recent trades."""
@@ -46,6 +58,73 @@ def get_binance_data_and_ofi():
         print(f"\nError getting live Bitcoin data: {e}")
         return None, None
 
+def calculate_live_prediction(bitcoin_df, current_timestamp, current_ofi):
+    """Calculate prediction using live data instead of historical lookup"""
+    try:
+        if len(bitcoin_df) < 2:  # Need at least 2 data points for volatility
+            return None
+            
+        df = bitcoin_df.copy()
+        
+        # Ensure 'timestamp' is the index and it's a datetime object
+        if 'timestamp' in df.columns:
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            df = df.set_index('timestamp')
+        
+        df = df.sort_index()
+        
+        # Remove rows with missing prices
+        df = df.dropna(subset=['btc_usdt_spot'])
+        if len(df) < 2:
+            return None
+        
+        # Find the start of the current hour from the data
+        current_hour = pd.to_datetime(current_timestamp).replace(minute=0, second=0, microsecond=0)
+        hour_data = df[df.index >= current_hour]
+        
+        if hour_data.empty:
+            return None
+            
+        p_start = hour_data['btc_usdt_spot'].iloc[0]
+        current_price = df['btc_usdt_spot'].iloc[-1]
+        
+        r = current_price / p_start - 1
+        
+        current_minute = pd.to_datetime(current_timestamp).minute
+        tau = 1 - (current_minute / 60)
+        
+        if tau <= 0:
+            tau = 0.01
+        
+        # Calculate 20-minute rolling volatility
+        df['lret'] = np.log(df['btc_usdt_spot']).diff()
+        vol_window = min(20, len(df) - 1)
+        
+        if vol_window > 0:
+            recent_returns = df['lret'].tail(vol_window)
+            vol = recent_returns.std() * np.sqrt(60)
+        else:
+            vol = 0.0
+            
+        if pd.isna(vol) or vol == 0:
+            vol = 0.01
+            
+        r_scaled = r / np.sqrt(tau)
+        
+        ofi = current_ofi if current_ofi is not None else 0.0
+        
+        if pd.isna([r_scaled, tau, vol, ofi]).any():
+            return None
+            
+        X_live = [[r_scaled, tau, vol, ofi]]
+        p_up = model.predict(X_live)[0]
+        
+        return p_up
+        
+    except Exception as e:
+        print(f"\nError calculating live prediction: {e}")
+        return None
+
 def init_database():
     """Initializes the database and creates/updates the table if needed."""
     conn = sqlite3.connect(DB_FILE)
@@ -68,6 +147,8 @@ def init_database():
         cursor.execute("ALTER TABLE polydata ADD COLUMN btc_usdt_spot REAL")
     if 'ofi' not in columns:
         cursor.execute("ALTER TABLE polydata ADD COLUMN ofi REAL")
+    if 'p_up_prediction' not in columns:
+        cursor.execute("ALTER TABLE polydata ADD COLUMN p_up_prediction REAL")
 
     conn.commit()
     conn.close()
@@ -298,6 +379,23 @@ def collect_data_once():
         # Fetch the BTC spot price and OFI from Binance first
         btc_price, ofi = get_binance_data_and_ofi()
         
+        # --- Prediction Logic ---
+        p_up_prediction = None
+        if model is not None and btc_price is not None:
+            # Fetch last 30 mins of data for volatility calculation
+            conn = sqlite3.connect(DB_FILE)
+            thirty_mins_ago = (t0 - timedelta(minutes=30)).strftime('%Y-%m-%d %H:%M:%S')
+            historical_df = pd.read_sql_query(
+                f"SELECT timestamp, btc_usdt_spot FROM polydata WHERE timestamp >= '{thirty_mins_ago}'", conn)
+            conn.close()
+            
+            # Append current price to historical data to get the most up-to-date features
+            if not historical_df.empty:
+                current_data_df = pd.DataFrame([{'timestamp': t0, 'btc_usdt_spot': btc_price}])
+                historical_df = pd.concat([historical_df, current_data_df], ignore_index=True)
+                p_up_prediction = calculate_live_prediction(historical_df, t0, ofi)
+        # --- End Prediction Logic ---
+
         token_id, market_name = get_current_market_token_id()
 
         t1 = datetime.now(UTC)
@@ -321,6 +419,7 @@ def collect_data_once():
                 'market_name': market_name,
                 'btc_usdt_spot': btc_price,
                 'ofi': ofi,
+                'p_up_prediction': p_up_prediction,
                 'token_id': token_id,
                 'best_bid': best_bid_price,
                 'best_ask': best_ask_price
@@ -331,8 +430,8 @@ def collect_data_once():
             conn = sqlite3.connect(DB_FILE)
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO polydata (timestamp, market_name, token_id, best_bid, best_ask, btc_usdt_spot, ofi)
-                VALUES (:timestamp, :market_name, :token_id, :best_bid, :best_ask, :btc_usdt_spot, :ofi)
+                INSERT INTO polydata (timestamp, market_name, token_id, best_bid, best_ask, btc_usdt_spot, ofi, p_up_prediction)
+                VALUES (:timestamp, :market_name, :token_id, :best_bid, :best_ask, :btc_usdt_spot, :ofi, :p_up_prediction)
             ''', data_row)
             conn.commit()
             conn.close()
@@ -340,7 +439,8 @@ def collect_data_once():
             t3 = datetime.now(UTC)
             btc_price_str = f"{btc_price:.2f}" if btc_price is not None else "N/A"
             ofi_str = f"{ofi:.4f}" if ofi is not None else "N/A"
-            print(f"({t3.strftime('%H:%M:%S.%f')}) Logged to DB: BTC={btc_price_str}, OFI={ofi_str}, Bid={best_bid_price:.2f}, Ask={best_ask_price:.2f} for '{market_name}'")
+            prediction_str = f"{p_up_prediction:.4f}" if p_up_prediction is not None else "N/A"
+            print(f"({t3.strftime('%H:%M:%S.%f')}) Logged to DB: BTC={btc_price_str}, OFI={ofi_str}, P(Up)={prediction_str}, Bid={best_bid_price:.2f}, Ask={best_ask_price:.2f} for '{market_name}'")
             print(f"({t3.strftime('%H:%M:%S.%f')}) --- Total run time: {(t3-t0).total_seconds():.4f}s ---")
 
         else:
