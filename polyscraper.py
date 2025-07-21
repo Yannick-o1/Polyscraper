@@ -533,6 +533,9 @@ def get_order_book(token_id):
 
 def collect_data_once():
     """Collect data for one minute and log it to the SQLite database."""
+    # Ensure the database and tables exist before any other operation
+    init_database()
+    
     try:
         t0 = datetime.now(UTC)
         print(f"({t0.strftime('%H:%M:%S.%f')}) --- Starting run ---")
@@ -594,7 +597,6 @@ def collect_data_once():
             }
 
             # Ensure the database and table exist, then insert the new row
-            init_database()
             conn = sqlite3.connect(DB_FILE)
             cursor = conn.cursor()
             cursor.execute('''
