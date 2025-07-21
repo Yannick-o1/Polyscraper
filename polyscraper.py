@@ -192,51 +192,36 @@ def get_market_token_id_for_hour(target_hour_dt_utc):
         return None, None
 
 def check_and_update_outcome(current_time_utc):
-    """At one minute past the hour, check and update the previous hour's market outcome."""
-    if current_time_utc.minute != 30:
-        return # Only run this logic at one minute past the hour
+    """At the top of the hour, check the price of the market that just closed and update its outcome."""
+    if current_time_utc.minute != 0:
+        return # Only run this logic at the top of the hour (e.g., 16:00)
 
-    print(f"({current_time_utc.strftime('%H:%M:%S')}) Checking outcome for previous hour...")
+    print(f"({current_time_utc.strftime('%H:%M:%S')}) Checking outcome for market that just resolved...")
     
-    # Determine the start of the previous hour
+    # Determine the start of the previous hour (the market that just ended)
     previous_hour_utc = current_time_utc - timedelta(hours=1)
     previous_hour_start_utc = previous_hour_utc.replace(minute=0, second=0, microsecond=0)
     
     token_id, market_name = get_market_token_id_for_hour(previous_hour_start_utc)
 
     if not token_id:
-        print(f"Could not find market for previous hour: {previous_hour_start_utc.strftime('%Y-%m-%d %H:%M')} UTC")
+        print(f"Could not find market for resolved hour: {previous_hour_start_utc.strftime('%Y-%m-%d %H:%M')} UTC")
         return
 
-    # To get the outcome, we need the condition_id, which is part of the market data.
-    # We will fetch the full market details.
+    # Fetch the last known price for the resolved market
     outcome = None
     try:
-        # The token_id is one of two tokens. We need the market's condition_id.
-        # We will look it up in the markets CSV using the unique market_name.
-        markets_df = pd.read_csv(MARKETS_CSV_FILE)
-        market_row = markets_df[markets_df['market_name'] == market_name]
-        
-        if market_row.empty:
-            print(f"Could not find market_name '{market_name}' in CSV.")
-            return
+        price_response = requests.get(f"{CLOB_API_URL}/price", params={"token_id": token_id})
+        price_response.raise_for_status()
+        price_data = price_response.json()
+        last_price = float(price_data.get('price'))
 
-        condition_id = market_row.iloc[0]['condition_id']
-
-        market_resp = requests.get(f"{CLOB_API_URL}/markets/{condition_id}")
-        market_resp.raise_for_status()
-        market_data = market_resp.json()
-
-        if market_data.get("closed") is True:
-            # The 'resolved_outcome_idx' tells us which token won.
-            # Index 0 is typically "YES" or "UP".
-            if market_data.get("resolved_outcome_idx") == 0:
-                outcome = "UP"
-            else:
-                outcome = "DOWN"
+        if last_price > 0.95:
+            outcome = "UP"
+        elif last_price < 0.05:
+            outcome = "DOWN"
     except Exception as e:
-        print(f"Error fetching market resolution data: {e}")
-
+        print(f"Error fetching final price for outcome: {e}")
 
     if outcome:
         print(f"Outcome for '{market_name}' was '{outcome}'. Updating database...")
