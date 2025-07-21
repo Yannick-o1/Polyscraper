@@ -14,7 +14,7 @@ import numpy as np
 CLOB_API_URL = "https://clob.polymarket.com"
 MARKETS_CSV_FILE = "btc_polymarkets.csv"
 DB_FILE = "polyscraper.db"
-MODEL_FILE = "btc_lgbm3.txt"
+MODEL_FILE = "btc_lgbm.txt"
 P_START_CACHE = {} # Simple cache: { "YYYY-MM-DD HH": price }
 
 # Load the LightGBM model once when the script starts
