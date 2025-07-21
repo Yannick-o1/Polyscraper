@@ -14,7 +14,8 @@ import numpy as np
 CLOB_API_URL = "https://clob.polymarket.com"
 MARKETS_CSV_FILE = "btc_polymarkets.csv"
 DB_FILE = "polyscraper.db"
-MODEL_FILE = "btc_lgbm.txt"
+MODEL_FILE = "btc_lgbm3.txt"
+P_START_CACHE = {} # Simple cache: { "YYYY-MM-DD HH": price }
 
 # Load the LightGBM model once when the script starts
 try:
@@ -23,6 +24,48 @@ except lgb.LGBMError as e:
     print(f"Error loading model file '{MODEL_FILE}': {e}")
     print("Predictions will be disabled.")
     model = None
+
+def get_p_start_from_binance(hour_start_utc):
+    """
+    Fetches the opening price for a specific hour from Binance 1-minute kline data.
+    Uses a cache to avoid redundant API calls.
+    """
+    global P_START_CACHE
+    hour_key = hour_start_utc.strftime('%Y-%m-%d %H')
+    
+    # Check cache first
+    if hour_key in P_START_CACHE:
+        return P_START_CACHE[hour_key]
+
+    print(f"Cache miss for p_start. Fetching from Binance for hour: {hour_key}")
+    try:
+        # Binance klines use milliseconds timestamps
+        start_time_ms = int(hour_start_utc.timestamp() * 1000)
+        
+        params = {
+            "symbol": "BTCUSDT",
+            "interval": "1m",
+            "startTime": start_time_ms,
+            "limit": 1
+        }
+        resp = requests.get("https://api.binance.com/api/v3/klines", params=params, timeout=5)
+        resp.raise_for_status()
+        kline_data = resp.json()
+
+        if not kline_data:
+            print("Could not fetch kline data from Binance for p_start.")
+            return None
+
+        # kline format: [open_time, open, high, low, close, ...]
+        p_start = float(kline_data[0][1])
+        
+        # Store in cache and return
+        P_START_CACHE[hour_key] = p_start
+        return p_start
+
+    except Exception as e:
+        print(f"Error getting p_start from Binance: {e}")
+        return None
 
 def get_binance_data_and_ofi():
     """Fetch live BTC/USDT price and calculate order flow imbalance from recent trades."""
@@ -58,13 +101,13 @@ def get_binance_data_and_ofi():
         print(f"\nError getting live Bitcoin data: {e}")
         return None, None
 
-def calculate_live_prediction(bitcoin_df, current_timestamp, current_ofi):
+def calculate_live_prediction(historical_df, current_timestamp, current_ofi, p_start, current_price):
     """Calculate prediction using live data instead of historical lookup"""
     try:
-        if len(bitcoin_df) < 2:  # Need at least 2 data points for volatility
+        if p_start is None or current_price is None:
             return None
             
-        df = bitcoin_df.copy()
+        df = historical_df.copy()
         
         # Ensure 'timestamp' is the index and it's a datetime object
         if 'timestamp' in df.columns:
@@ -78,17 +121,6 @@ def calculate_live_prediction(bitcoin_df, current_timestamp, current_ofi):
         df = df.dropna(subset=['btc_usdt_spot'])
         if len(df) < 2:
             return None
-        
-        # Find the start of the current hour from the data
-        # current_timestamp is already tz-aware, so we just need to truncate it
-        current_hour = pd.to_datetime(current_timestamp).replace(minute=0, second=0, microsecond=0)
-        hour_data = df[df.index >= current_hour]
-        
-        if hour_data.empty:
-            return None
-            
-        p_start = hour_data['btc_usdt_spot'].iloc[0]
-        current_price = df['btc_usdt_spot'].iloc[-1]
         
         r = current_price / p_start - 1
         
@@ -476,6 +508,12 @@ def collect_data_once():
         # --- Prediction Logic ---
         p_up_prediction = None
         if model is not None and btc_price is not None:
+            # Determine the start of the current hour
+            current_hour_start_utc = t0.replace(minute=0, second=0, microsecond=0)
+            
+            # Get p_start from cache or Binance Klines
+            p_start = get_p_start_from_binance(current_hour_start_utc)
+
             # Fetch last 30 mins of data for volatility calculation
             conn = sqlite3.connect(DB_FILE)
             thirty_mins_ago = (t0 - timedelta(minutes=30)).strftime('%Y-%m-%d %H:%M:%S')
@@ -483,13 +521,12 @@ def collect_data_once():
                 f"SELECT timestamp, btc_usdt_spot FROM polydata WHERE timestamp >= '{thirty_mins_ago}'", conn)
             conn.close()
             
-            # Append current price to historical data to get the most up-to-date features
+            # Append current price to historical data to get the most up-to-date volatility
             if not historical_df.empty:
-                # Convert t0 to a string to match the text format from the database
-                t0_str = t0.strftime('%Y-%m-%d %H:%M:%S')
-                current_data_df = pd.DataFrame([{'timestamp': t0_str, 'btc_usdt_spot': btc_price}])
-                combined_df = pd.concat([historical_df, current_data_df], ignore_index=True)
-                p_up_prediction = calculate_live_prediction(combined_df, t0, ofi)
+                current_data_df = pd.DataFrame([{'timestamp': t0.strftime('%Y-%m-%d %H:%M:%S'), 'btc_usdt_spot': btc_price}])
+                historical_df = pd.concat([historical_df, current_data_df], ignore_index=True)
+            
+            p_up_prediction = calculate_live_prediction(historical_df, t0, ofi, p_start, btc_price)
         # --- End Prediction Logic ---
 
         token_id, market_name = get_current_market_token_id()
