@@ -41,6 +41,7 @@ DATA_VIEWER_TEMPLATE = """
                 <th>P(Up) Prediction</th>
                 <th>Best Bid</th>
                 <th>Best Ask</th>
+                <th>Delta</th>
             </tr>
         </thead>
         <tbody>
@@ -50,9 +51,10 @@ DATA_VIEWER_TEMPLATE = """
                 <td>{{ row.market_name }}</td>
                 <td>{{ "%.2f"|format(row.btc_usdt_spot) if row.btc_usdt_spot is not none else 'N/A' }}</td>
                 <td>{{ "%.4f"|format(row.ofi) if row.ofi is not none else 'N/A' }}</td>
-                <td>{{ "%.2f%%"|format(row.p_up_prediction * 100) if row.p_up_prediction is not none else 'N/A' }}</td>
-                <td>{{ "%.0f%%"|format(row.best_bid * 100) if row.best_bid is not none else 'N/A' }}</td>
-                <td>{{ "%.0f%%"|format(row.best_ask * 100) if row.best_ask is not none else 'N/A' }}</td>
+                <td>{{ "%.2f"|format(row.p_up_prediction * 100) if row.p_up_prediction is not none else 'N/A' }}</td>
+                <td>{{ "%.0f"|format(row.best_bid * 100) if row.best_bid is not none else 'N/A' }}</td>
+                <td>{{ "%.0f"|format(row.best_ask * 100) if row.best_ask is not none else 'N/A' }}</td>
+                <td>{{ "%.2f"|format((row.p_up_prediction - (row.best_bid + row.best_ask) / 2) * 100) if row.p_up_prediction is not none and row.best_bid is not none and row.best_ask is not none else 'N/A' }}</td>
             </tr>
             {% endfor %}
         </tbody>
