@@ -68,7 +68,8 @@ def calculate_live_prediction(bitcoin_df, current_timestamp, current_ofi):
         
         # Ensure 'timestamp' is the index and it's a datetime object
         if 'timestamp' in df.columns:
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            # Tell pandas to interpret the timestamps as UTC
+            df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
             df = df.set_index('timestamp')
         
         df = df.sort_index()
@@ -79,7 +80,8 @@ def calculate_live_prediction(bitcoin_df, current_timestamp, current_ofi):
             return None
         
         # Find the start of the current hour from the data
-        current_hour = pd.to_datetime(current_timestamp).replace(minute=0, second=0, microsecond=0)
+        # Localize current_timestamp to UTC to match the dataframe's index
+        current_hour = pd.to_datetime(current_timestamp).tz_localize('UTC').replace(minute=0, second=0, microsecond=0)
         hour_data = df[df.index >= current_hour]
         
         if hour_data.empty:
