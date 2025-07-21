@@ -225,7 +225,7 @@ def get_market_token_id_for_hour(target_hour_dt_utc):
 
 def check_and_update_outcome(current_time_utc):
     """At the top of the hour, check the DB to determine the previous hour's market outcome."""
-    if current_time_utc.minute != 0:
+    if current_time_utc.minute != 10:
         return # Only run this logic at the top of the hour (e.g., 16:00)
 
     print(f"({current_time_utc.strftime('%H:%M:%S')}) Checking outcome for market that just resolved...")
