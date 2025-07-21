@@ -13,7 +13,6 @@ CLOB_API_URL = "https://clob.polymarket.com"
 MARKETS_CSV_FILE = "btc_polymarkets.csv"
 DB_FILE = "polyscraper.db"
 MODEL_FILE = "btc_lgbm.txt"
-P_START_CACHE = {} # Simple cache: { "YYYY-MM-DD HH": price }
 
 # Load the LightGBM model once when the script starts
 try:
@@ -26,44 +25,60 @@ except lgb.LGBMError as e:
 def get_p_start_from_binance(hour_start_utc):
     """
     Fetches the opening price for a specific hour from Binance 1-minute kline data.
-    Uses a cache to avoid redundant API calls.
+    Uses a database cache to avoid redundant API calls.
     """
-    global P_START_CACHE
     hour_key = hour_start_utc.strftime('%Y-%m-%d %H')
-    
-    # Check cache first
-    if hour_key in P_START_CACHE:
-        return P_START_CACHE[hour_key]
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
 
-    print(f"Cache miss for p_start. Fetching from Binance for hour: {hour_key}")
-    
-    # --- New Outcome Logic ---
-    # Before fetching the new p_start, check if we can resolve the previous hour
-    previous_hour_utc = hour_start_utc - timedelta(hours=1)
-    previous_hour_key = previous_hour_utc.strftime('%Y-%m-%d %H')
-    if previous_hour_key in P_START_CACHE:
-        p_start_previous = P_START_CACHE[previous_hour_key]
-        # p_start_current is the price at the *end* of the previous hour
-        p_start_current = get_p_start_from_binance_api_call(hour_start_utc)
+        # 1. Check cache first
+        cursor.execute("SELECT p_start_price FROM p_start_cache WHERE hour_key = ?", (hour_key,))
+        result = cursor.fetchone()
+        if result:
+            return result[0]
 
-        outcome = None
-        if p_start_previous is not None and p_start_current is not None:
-            if p_start_current > p_start_previous:
-                outcome = "UP"
-            elif p_start_current < p_start_previous:
-                outcome = "DOWN"
-            else:
-                outcome = "FLAT"
+        # 2. If miss, fetch new price from API
+        print(f"Cache miss for p_start. Fetching from Binance for hour: {hour_key}")
+        p_start_new = get_p_start_from_binance_api_call(hour_start_utc)
+
+        # 3. Check for previous hour's price in cache to resolve outcome
+        previous_hour_utc = hour_start_utc - timedelta(hours=1)
+        previous_hour_key = previous_hour_utc.strftime('%Y-%m-%d %H')
+        cursor.execute("SELECT p_start_price FROM p_start_cache WHERE hour_key = ?", (previous_hour_key,))
+        prev_result = cursor.fetchone()
+
+        if prev_result:
+            p_start_previous = prev_result[0]
+            p_start_current = p_start_new
+
+            outcome = None
+            if p_start_previous is not None and p_start_current is not None:
+                if p_start_current > p_start_previous:
+                    outcome = "UP"
+                elif p_start_current < p_start_previous:
+                    outcome = "DOWN"
+                else:
+                    outcome = "FLAT"
+            
+            if outcome:
+                update_outcome_in_db(previous_hour_utc, outcome, p_start_previous, p_start_current)
         
-        if outcome:
-            update_outcome_in_db(previous_hour_utc, outcome, p_start_previous, p_start_current)
-    # --- End New Outcome Logic ---
+        # 4. Cache the new price in the database
+        if p_start_new is not None:
+            cursor.execute("INSERT OR REPLACE INTO p_start_cache (hour_key, p_start_price) VALUES (?, ?)", (hour_key, p_start_new))
+            conn.commit()
+        
+        return p_start_new
 
-    # Now, fetch and cache the p_start for the requested hour
-    p_start = get_p_start_from_binance_api_call(hour_start_utc)
-    if p_start is not None:
-        P_START_CACHE[hour_key] = p_start
-    return p_start
+    except sqlite3.Error as e:
+        print(f"Database error in get_p_start_from_binance: {e}")
+        # Fallback to API call without caching if DB fails
+        return get_p_start_from_binance_api_call(hour_start_utc)
+    finally:
+        if conn:
+            conn.close()
 
 def get_p_start_from_binance_api_call(hour_start_utc):
     """Performs the actual API call to Binance for kline data."""
@@ -227,6 +242,14 @@ def init_database():
             token_id TEXT NOT NULL,
             best_bid REAL NOT NULL,
             best_ask REAL NOT NULL
+        )
+    ''')
+
+    # Create the cache table for p_start values
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS p_start_cache (
+            hour_key TEXT PRIMARY KEY,
+            p_start_price REAL NOT NULL
         )
     ''')
     
