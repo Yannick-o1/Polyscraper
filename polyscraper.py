@@ -193,7 +193,7 @@ def get_market_token_id_for_hour(target_hour_dt_utc):
 
 def check_and_update_outcome(current_time_utc):
     """At one minute past the hour, check and update the previous hour's market outcome."""
-    if current_time_utc.minute != 16:
+    if current_time_utc.minute != 24:
         return # Only run this logic at one minute past the hour
 
     print(f"({current_time_utc.strftime('%H:%M:%S')}) Checking outcome for previous hour...")
@@ -208,21 +208,30 @@ def check_and_update_outcome(current_time_utc):
         print(f"Could not find market for previous hour: {previous_hour_start_utc.strftime('%Y-%m-%d %H:%M')} UTC")
         return
 
-    best_bid, best_ask = get_order_book(token_id)
-    
+    # To get the outcome, we need the condition_id, which is part of the market data.
+    # We will fetch the full market details.
     outcome = None
-    if best_bid and not best_ask:  # Bids exist, but no asks (resolved UP)
-        if best_bid[0] > 0.95:
-            outcome = "UP"
-    elif not best_bid and best_ask:  # Asks exist, but no bids (resolved DOWN)
-        if best_ask[0] < 0.05:
-            outcome = "DOWN"
-    elif best_bid and best_ask: # Fallback for edge cases where both sides still exist
-        midpoint = (best_bid[0] + best_ask[0]) / 2
-        if midpoint > 0.95:
-            outcome = "UP"
-        elif midpoint < 0.05:
-            outcome = "DOWN"
+    try:
+        # The token_id is one of two tokens. We need the market's condition_id.
+        # A simple way to get it is to look it up in the markets CSV.
+        markets_df = pd.read_csv(MARKETS_CSV_FILE)
+        market_row = markets_df[markets_df['token_id'] == int(token_id)].iloc[0]
+        condition_id = market_row['condition_id']
+
+        market_resp = requests.get(f"{CLOB_API_URL}/markets/{condition_id}")
+        market_resp.raise_for_status()
+        market_data = market_resp.json()
+
+        if market_data.get("closed") is True:
+            # The 'resolved_outcome_idx' tells us which token won.
+            # Index 0 is typically "YES" or "UP".
+            if market_data.get("resolved_outcome_idx") == 0:
+                outcome = "UP"
+            else:
+                outcome = "DOWN"
+    except Exception as e:
+        print(f"Error fetching market resolution data: {e}")
+
 
     if outcome:
         print(f"Outcome for '{market_name}' was '{outcome}'. Updating database...")
@@ -348,6 +357,7 @@ def update_markets_csv():
         bitcoin_market_count += 1
         slug = m.get("market_slug")
         question = m.get("question")
+        condition_id = m.get("condition_id") # We need this for outcome checking
         
         # Get the first token (assuming there are typically 2 tokens for yes/no)
         if m.get("tokens") and len(m["tokens"]) > 0:
@@ -391,7 +401,8 @@ def update_markets_csv():
             "market_name": question,
             "token_id": token_id,
             "date_time": parsed_date,
-            "market_slug": slug
+            "market_slug": slug,
+            "condition_id": condition_id
         })
         
         time.sleep(0.1)  # Small delay to be respectful to the API
@@ -405,7 +416,7 @@ def update_markets_csv():
 
     try:
         with open(MARKETS_CSV_FILE, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=["market_name", "token_id", "date_time", "market_slug"])
+            writer = csv.DictWriter(f, fieldnames=["market_name", "token_id", "date_time", "market_slug", "condition_id"])
             writer.writeheader()
             writer.writerows(market_data)
         print(f"Found {bitcoin_market_count} Bitcoin hourly markets")
