@@ -115,7 +115,15 @@ def calculate_live_prediction(bitcoin_df, current_timestamp, current_ofi):
         
         ofi = current_ofi if current_ofi is not None else 0.0
         
+        # --- Diagnostic Logging ---
+        print("--- Prediction Feature Calculation ---")
+        print(f"p_start: {p_start}, current_price: {current_price}")
+        print(f"r: {r:.6f}, tau: {tau:.4f}, vol: {vol:.6f}, ofi: {ofi:.4f}")
+        print(f"r_scaled: {r_scaled:.6f}")
+        # --- End Diagnostic Logging ---
+
         if pd.isna([r_scaled, tau, vol, ofi]).any():
+            print("One of the features is NaN, skipping prediction.")
             return None
             
         X_live = [[r_scaled, tau, vol, ofi]]
