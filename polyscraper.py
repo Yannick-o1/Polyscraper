@@ -204,7 +204,13 @@ def check_and_update_outcome(current_time_utc):
     best_bid, best_ask = get_order_book(token_id)
     
     outcome = None
-    if best_bid and best_ask:
+    if best_bid and not best_ask:  # Bids exist, but no asks (resolved UP)
+        if best_bid[0] > 0.95:
+            outcome = "UP"
+    elif not best_bid and best_ask:  # Asks exist, but no bids (resolved DOWN)
+        if best_ask[0] < 0.05:
+            outcome = "DOWN"
+    elif best_bid and best_ask: # Fallback for edge cases where both sides still exist
         midpoint = (best_bid[0] + best_ask[0]) / 2
         if midpoint > 0.95:
             outcome = "UP"
