@@ -224,47 +224,41 @@ def get_market_token_id_for_hour(target_hour_dt_utc):
         return None, None
 
 def check_and_update_outcome(current_time_utc):
-    """At the top of the hour, check the price of the market that just closed and update its outcome."""
+    """At the top of the hour, check Binance prices to determine the previous hour's market outcome."""
     if current_time_utc.minute != 0:
         return # Only run this logic at the top of the hour (e.g., 16:00)
 
     print(f"({current_time_utc.strftime('%H:%M:%S')}) Checking outcome for market that just resolved...")
     
-    # Determine the start of the previous hour (the market that just ended)
-    previous_hour_utc = current_time_utc - timedelta(hours=1)
-    previous_hour_start_utc = previous_hour_utc.replace(minute=0, second=0, microsecond=0)
+    # Determine the start and end of the previous hour
+    previous_hour_end_utc = current_time_utc.replace(minute=0, second=0, microsecond=0)
+    previous_hour_start_utc = previous_hour_end_utc - timedelta(hours=1)
     
-    token_id, market_name = get_market_token_id_for_hour(previous_hour_start_utc)
+    # Get the opening price at the start of the last hour
+    p_start = get_p_start_from_binance(previous_hour_start_utc)
+    # Get the opening price at the start of the current hour (which is the end price of the last hour)
+    p_end = get_p_start_from_binance(previous_hour_end_utc)
 
-    if not token_id:
-        print(f"Could not find market for resolved hour: {previous_hour_start_utc.strftime('%Y-%m-%d %H:%M')} UTC")
-        return
-
-    # Fetch the last known price for the resolved market
     outcome = None
-    try:
-        price_response = requests.get(f"{CLOB_API_URL}/price", params={"token_id": token_id})
-        price_response.raise_for_status()
-        price_data = price_response.json()
-        last_price = float(price_data.get('price'))
-
-        if last_price > 0.95:
+    if p_start is not None and p_end is not None:
+        if p_end > p_start:
             outcome = "UP"
-        elif last_price < 0.05:
+        elif p_end < p_start:
             outcome = "DOWN"
-    except Exception as e:
-        print(f"Error fetching final price for outcome: {e}")
-
+        else:
+            outcome = "FLAT" # Handle the rare case of no price change
+    
     if outcome:
-        print(f"Outcome for '{market_name}' was '{outcome}'. Updating database...")
+        # Get the market name for logging purposes
+        _, market_name = get_market_token_id_for_hour(previous_hour_start_utc)
+        print(f"Outcome for '{market_name}' was '{outcome}' (p_start={p_start}, p_end={p_end}). Updating database...")
         try:
             conn = sqlite3.connect(DB_FILE)
             cursor = conn.cursor()
             
             # Define the time range for the update
-            hour_end_utc = previous_hour_start_utc + timedelta(hours=1)
             start_str = previous_hour_start_utc.strftime('%Y-%m-%d %H:%M:%S')
-            end_str = hour_end_utc.strftime('%Y-%m-%d %H:%M:%S')
+            end_str = previous_hour_end_utc.strftime('%Y-%m-%d %H:%M:%S')
 
             cursor.execute("""
                 UPDATE polydata 
@@ -278,7 +272,7 @@ def check_and_update_outcome(current_time_utc):
         except Exception as e:
             print(f"Error updating outcome in database: {e}")
     else:
-        print(f"Could not determine definitive outcome for '{market_name}'.")
+        print("Could not determine outcome due to missing Binance price data.")
 
 def parse_market_datetime(market_slug, market_question):
     """
