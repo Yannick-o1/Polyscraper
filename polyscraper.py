@@ -7,17 +7,19 @@ import csv
 import sqlite3
 import lightgbm as lgb
 import numpy as np
+import os
 
 # --- Globals ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CLOB_API_URL = "https://clob.polymarket.com"
-MARKETS_CSV_FILE = "btc_polymarkets.csv"
-DB_FILE = "polyscraper.db"
-MODEL_FILE = "btc_lgbm.txt"
+MARKETS_CSV_FILE = os.path.join(BASE_DIR, "btc_polymarkets.csv")
+DB_FILE = os.path.join(BASE_DIR, "polyscraper.db")
+MODEL_FILE = os.path.join(BASE_DIR, "btc_lgbm.txt")
 
 # Load the LightGBM model once when the script starts
 try:
     model = lgb.Booster(model_file=MODEL_FILE)
-except lgb.LGBMError as e:
+except Exception as e:
     print(f"Error loading model file '{MODEL_FILE}': {e}")
     print("Predictions will be disabled.")
     model = None
