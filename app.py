@@ -30,7 +30,7 @@ DATA_VIEWER_TEMPLATE = """
 </head>
 <body>
     <h1>Latest Polymarket Data</h1>
-    <p>Displaying the 50 most recent entries, ordered by timestamp.</p>
+    <p>Displaying the 100 most recent entries, ordered by timestamp.</p>
     <table>
         <thead>
             <tr>
@@ -84,15 +84,15 @@ def run_scraper():
 
 @app.route('/view-data', methods=['GET'])
 def view_data():
-    """This endpoint displays the last 50 entries from the database."""
+    """This endpoint displays the last 100 entries from the database."""
     try:
         conn = sqlite3.connect(DB_FILE)
         # This row_factory allows us to access columns by name
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
-        # Fetch the last 50 records, ordered by timestamp descending
-        cursor.execute("SELECT timestamp, market_name, best_bid, best_ask, btc_usdt_spot, ofi, p_up_prediction, outcome FROM polydata ORDER BY timestamp DESC LIMIT 50")
+        # Fetch the last 100 records, ordered by timestamp descending
+        cursor.execute("SELECT timestamp, market_name, best_bid, best_ask, btc_usdt_spot, ofi, p_up_prediction, outcome FROM polydata ORDER BY timestamp DESC LIMIT 100")
         data = cursor.fetchall()
         
         conn.close()
