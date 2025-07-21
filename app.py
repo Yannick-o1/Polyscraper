@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, render_template_string
+from flask import Flask, jsonify, render_template_string, url_for
 import subprocess
 import os
 import sqlite3
@@ -7,18 +7,57 @@ app = Flask(__name__)
 
 # Get the absolute path of the directory where this script is located
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# Construct the path to the polyscraper.py script
-SCRAPER_SCRIPT_PATH = os.path.join(BASE_DIR, 'polyscraper.py')
-DB_FILE = os.path.join(BASE_DIR, 'polyscraper.db')
 
-# HTML Template for the data viewer page
+# --- Configuration for multiple currencies ---
+CURRENCIES = {
+    'btc': {
+        'name': 'Bitcoin',
+        'scraper_script': 'polyscraper.py',
+        'db_file': 'polyscraper.db'
+    },
+    'sol': {
+        'name': 'Solana',
+        'scraper_script': 'sol_polyscraper.py',
+        'db_file': 'sol_polyscraper.db'
+    },
+    'xrp': {
+        'name': 'XRP',
+        'scraper_script': 'xrp_polyscraper.py',
+        'db_file': 'xrp_polyscraper.db'
+    },
+    'eth': {
+        'name': 'Ethereum',
+        'scraper_script': 'eth_polyscraper.py',
+        'db_file': 'eth_polyscraper.db'
+    }
+}
+
+# --- Templates ---
+HOME_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Polyscraper Dashboard</title>
+</head>
+<body>
+    <h1>Select a currency to view its data:</h1>
+    <ul>
+        {% for currency_code, currency_data in currencies.items() %}
+            <li><a href="{{ url_for('view_data', currency=currency_code) }}">{{ currency_data.name }}</a></li>
+        {% endfor %}
+    </ul>
+</body>
+</html>
+"""
+
 DATA_VIEWER_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Polyscraper Data</title>
+    <title>{{ currency_name }} Data</title>
     <style>
         body { font-family: Arial, sans-serif; margin: 2em; background-color: #f4f4f4; }
         h1 { color: #333; }
@@ -29,7 +68,8 @@ DATA_VIEWER_TEMPLATE = """
     </style>
 </head>
 <body>
-    <h1>Latest Polymarket Data</h1>
+    <a href="{{ url_for('home') }}">Back to Home</a>
+    <h1>Latest {{ currency_name }} Data</h1>
     <p>Displaying the 100 most recent entries, ordered by timestamp.</p>
     <table>
         <thead>
@@ -37,7 +77,7 @@ DATA_VIEWER_TEMPLATE = """
                 <th>Timestamp (UTC)</th>
                 <th>Market Name</th>
                 <th>Outcome</th>
-                <th>BTC Spot (USDT)</th>
+                <th>Spot Price (USDT)</th>
                 <th>OFI</th>
                 <th>P(Up) Prediction</th>
                 <th>Best Bid</th>
@@ -51,7 +91,7 @@ DATA_VIEWER_TEMPLATE = """
                 <td>{{ row.timestamp }}</td>
                 <td>{{ row.market_name }}</td>
                 <td>{{ row.outcome if row.outcome else 'N/A' }}</td>
-                <td>{{ "%.2f"|format(row.btc_usdt_spot) if row.btc_usdt_spot is not none else 'N/A' }}</td>
+                <td>{{ "%.2f"|format(row.spot_price) if row.spot_price is not none else 'N/A' }}</td>
                 <td>{{ "%.4f"|format(row.ofi) if row.ofi is not none else 'N/A' }}</td>
                 <td>{{ "%.2f"|format(row.p_up_prediction * 100) if row.p_up_prediction is not none else 'N/A' }}</td>
                 <td>{{ "%.0f"|format(row.best_bid * 100) if row.best_bid is not none else 'N/A' }}</td>
@@ -65,46 +105,61 @@ DATA_VIEWER_TEMPLATE = """
 </html>
 """
 
-@app.route('/run-scraper', methods=['POST'])
-def run_scraper():
+@app.route('/', methods=['GET'])
+def home():
+    return render_template_string(HOME_TEMPLATE, currencies=CURRENCIES)
+
+@app.route('/run-scraper/<currency>', methods=['POST'])
+def run_scraper(currency):
     """
-    This endpoint triggers the polyscraper.py script to run once.
-    It runs the scraper as a non-blocking background process.
+    Triggers a specific currency's scraper script to run once.
     """
+    if currency not in CURRENCIES:
+        return jsonify({"status": "error", "message": "Invalid currency."}), 404
+
     try:
-        # Use subprocess.Popen to run the script in the background
-        # This ensures the web server can respond immediately without waiting for the scraper
-        # We also need to specify the python executable from our virtual environment.
+        config = CURRENCIES[currency]
+        script_path = os.path.join(BASE_DIR, config['scraper_script'])
         python_executable = os.path.join(BASE_DIR, 'venv/bin/python')
-        subprocess.Popen([python_executable, SCRAPER_SCRIPT_PATH, '--run-once'])
         
-        return jsonify({"status": "success", "message": "Scraper job initiated."}), 202
+        subprocess.Popen([python_executable, script_path, '--run-once'])
+        return jsonify({"status": "success", "message": f"{config['name']} scraper job initiated."}), 202
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-@app.route('/view-data', methods=['GET'])
-def view_data():
-    """This endpoint displays the last 100 entries from the database."""
+@app.route('/view/<currency>', methods=['GET'])
+def view_data(currency):
+    """Displays the last 100 entries from the database for a specific currency."""
+    if currency not in CURRENCIES:
+        return "<h1>Invalid Currency</h1>", 404
+
+    config = CURRENCIES[currency]
+    db_path = os.path.join(BASE_DIR, config['db_file'])
+    spot_price_column = f"{currency}_usdt_spot"
+
     try:
-        conn = sqlite3.connect(DB_FILE)
-        # This row_factory allows us to access columns by name
+        conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
-        # Fetch the last 100 records, ordered by timestamp descending
-        cursor.execute("SELECT timestamp, market_name, best_bid, best_ask, btc_usdt_spot, ofi, p_up_prediction, outcome FROM polydata ORDER BY timestamp DESC LIMIT 100")
+        # Check if the table and column exist to provide better error messages
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='polydata';")
+        if cursor.fetchone() is None:
+            return f"<h1>Data not available yet</h1><p>The table 'polydata' does not exist in {config['db_file']}. Please run the scraper for {config['name']}.</p>", 404
+        
+        query = f"SELECT timestamp, market_name, best_bid, best_ask, {spot_price_column} as spot_price, ofi, p_up_prediction, outcome FROM polydata ORDER BY timestamp DESC LIMIT 100"
+        cursor.execute(query)
         data = cursor.fetchall()
         
         conn.close()
         
-        return render_template_string(DATA_VIEWER_TEMPLATE, data=data)
-    except sqlite3.OperationalError:
-        # This handles the case where the database file or table doesn't exist yet
-        return "<h1>Data not available yet</h1><p>The database has not been created. Please trigger the scraper at least once.</p>", 404
+        return render_template_string(DATA_VIEWER_TEMPLATE, data=data, currency_name=config['name'])
+    except sqlite3.OperationalError as e:
+        if "no such column" in str(e):
+             return f"<h1>Data not available yet</h1><p>The column '{spot_price_column}' does not exist yet. Please run the scraper for {config['name']}.</p>", 404
+        return f"<h1>Data not available yet</h1><p>The database for {config['name']} has not been created or is empty. Please trigger the scraper at least once.</p>", 404
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
-    # Listen on all available network interfaces, which is necessary for it
-    # to be accessible from outside the local machine on AWS.
     app.run(host='0.0.0.0', port=5000) 
