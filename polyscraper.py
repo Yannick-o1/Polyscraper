@@ -393,9 +393,11 @@ def collect_data_once():
             
             # Append current price to historical data to get the most up-to-date features
             if not historical_df.empty:
-                current_data_df = pd.DataFrame([{'timestamp': t0, 'btc_usdt_spot': btc_price}])
-                historical_df = pd.concat([historical_df, current_data_df], ignore_index=True)
-                p_up_prediction = calculate_live_prediction(historical_df, t0, ofi)
+                # Convert t0 to a string to match the text format from the database
+                t0_str = t0.strftime('%Y-%m-%d %H:%M:%S')
+                current_data_df = pd.DataFrame([{'timestamp': t0_str, 'btc_usdt_spot': btc_price}])
+                combined_df = pd.concat([historical_df, current_data_df], ignore_index=True)
+                p_up_prediction = calculate_live_prediction(combined_df, t0, ofi)
         # --- End Prediction Logic ---
 
         token_id, market_name = get_current_market_token_id()
