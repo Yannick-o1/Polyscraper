@@ -151,9 +151,90 @@ def init_database():
         cursor.execute("ALTER TABLE polydata ADD COLUMN ofi REAL")
     if 'p_up_prediction' not in columns:
         cursor.execute("ALTER TABLE polydata ADD COLUMN p_up_prediction REAL")
+    if 'outcome' not in columns:
+        cursor.execute("ALTER TABLE polydata ADD COLUMN outcome TEXT")
 
     conn.commit()
     conn.close()
+
+def get_market_token_id_for_hour(target_hour_dt_utc):
+    """Find the token ID for the market corresponding to a specific hour."""
+    try:
+        markets_df = pd.read_csv(MARKETS_CSV_FILE)
+        et_tz = ZoneInfo("America/New_York")
+        # Convert the target UTC datetime to America/New_York timezone for lookup
+        target_hour_dt_et = target_hour_dt_utc.astimezone(et_tz)
+        target_datetime_str = target_hour_dt_et.strftime('%Y-%m-%d %H:%M EDT')
+        
+        matching_rows = markets_df[markets_df['date_time'] == target_datetime_str]
+        
+        if matching_rows.empty:
+            return None, None
+        
+        market_row = matching_rows.iloc[0]
+        token_id = str(int(market_row['token_id']))
+        market_name = market_row['market_name']
+        
+        return token_id, market_name
+        
+    except FileNotFoundError:
+        print(f"Error: '{MARKETS_CSV_FILE}' not found.")
+        return None, None
+    except Exception as e:
+        print(f"Error reading or processing CSV for token ID lookup: {e}")
+        return None, None
+
+def check_and_update_outcome(current_time_utc):
+    """At one minute past the hour, check and update the previous hour's market outcome."""
+    if current_time_utc.minute != 1:
+        return # Only run this logic at one minute past the hour
+
+    print(f"({current_time_utc.strftime('%H:%M:%S')}) Checking outcome for previous hour...")
+    
+    # Determine the start of the previous hour
+    previous_hour_utc = current_time_utc - timedelta(hours=1)
+    previous_hour_start_utc = previous_hour_utc.replace(minute=0, second=0, microsecond=0)
+    
+    token_id, market_name = get_market_token_id_for_hour(previous_hour_start_utc)
+
+    if not token_id:
+        print(f"Could not find market for previous hour: {previous_hour_start_utc.strftime('%Y-%m-%d %H:%M')} UTC")
+        return
+
+    best_bid, best_ask = get_order_book(token_id)
+    
+    outcome = None
+    if best_bid and best_ask:
+        midpoint = (best_bid[0] + best_ask[0]) / 2
+        if midpoint > 0.95:
+            outcome = "UP"
+        elif midpoint < 0.05:
+            outcome = "DOWN"
+
+    if outcome:
+        print(f"Outcome for '{market_name}' was '{outcome}'. Updating database...")
+        try:
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            
+            # Define the time range for the update
+            hour_end_utc = previous_hour_start_utc + timedelta(hours=1)
+            start_str = previous_hour_start_utc.strftime('%Y-%m-%d %H:%M:%S')
+            end_str = hour_end_utc.strftime('%Y-%m-%d %H:%M:%S')
+
+            cursor.execute("""
+                UPDATE polydata 
+                SET outcome = ? 
+                WHERE timestamp >= ? AND timestamp < ?
+            """, (outcome, start_str, end_str))
+            
+            conn.commit()
+            conn.close()
+            print(f"Successfully updated {cursor.rowcount} rows for the previous hour.")
+        except Exception as e:
+            print(f"Error updating outcome in database: {e}")
+    else:
+        print(f"Could not determine definitive outcome for '{market_name}'.")
 
 def parse_market_datetime(market_slug, market_question):
     """
@@ -322,30 +403,8 @@ def update_markets_csv():
 
 def get_current_market_token_id():
     """Find the token ID for the Bitcoin market that corresponds to the current date/time"""
-    try:
-        markets_df = pd.read_csv(MARKETS_CSV_FILE)
-        et_tz = ZoneInfo("America/New_York")
-        current_time = datetime.now(et_tz)
-        current_hour = current_time.replace(minute=0, second=0, microsecond=0)
-        target_datetime = current_hour.strftime('%Y-%m-%d %H:%M EDT')
-        
-        matching_rows = markets_df[markets_df['date_time'] == target_datetime]
-        
-        if matching_rows.empty:
-            return None, None
-        
-        market_row = matching_rows.iloc[0]
-        token_id = str(int(market_row['token_id']))
-        market_name = market_row['market_name']
-        
-        return token_id, market_name
-        
-    except FileNotFoundError:
-        print(f"Error: '{MARKETS_CSV_FILE}' not found. Please run with --update-markets first.")
-        return None, None
-    except Exception as e:
-        print(f"Error reading or processing CSV: {e}")
-        return None, None
+    current_hour_utc = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+    return get_market_token_id_for_hour(current_hour_utc)
 
 def get_order_book(token_id):
     """Get the current order book for a given token ID"""
@@ -377,6 +436,9 @@ def collect_data_once():
     try:
         t0 = datetime.now(UTC)
         print(f"({t0.strftime('%H:%M:%S.%f')}) --- Starting run ---")
+        
+        # At XX:01, check and update the outcome for the previous hour
+        check_and_update_outcome(t0)
         
         # Fetch the BTC spot price and OFI from Binance first
         btc_price, ofi = get_binance_data_and_ofi()
