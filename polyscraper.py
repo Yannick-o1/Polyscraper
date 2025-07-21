@@ -38,6 +38,37 @@ def get_p_start_from_binance(hour_start_utc):
         return P_START_CACHE[hour_key]
 
     print(f"Cache miss for p_start. Fetching from Binance for hour: {hour_key}")
+    
+    # --- New Outcome Logic ---
+    # Before fetching the new p_start, check if we can resolve the previous hour
+    previous_hour_utc = hour_start_utc - timedelta(hours=1)
+    previous_hour_key = previous_hour_utc.strftime('%Y-%m-%d %H')
+    if previous_hour_key in P_START_CACHE:
+        p_start_previous = P_START_CACHE[previous_hour_key]
+        # p_start_current is the price at the *end* of the previous hour
+        p_start_current = get_p_start_from_binance_api_call(hour_start_utc)
+
+        outcome = None
+        if p_start_previous is not None and p_start_current is not None:
+            if p_start_current > p_start_previous:
+                outcome = "UP"
+            elif p_start_current < p_start_previous:
+                outcome = "DOWN"
+            else:
+                outcome = "FLAT"
+        
+        if outcome:
+            update_outcome_in_db(previous_hour_utc, outcome, p_start_previous, p_start_current)
+    # --- End New Outcome Logic ---
+
+    # Now, fetch and cache the p_start for the requested hour
+    p_start = get_p_start_from_binance_api_call(hour_start_utc)
+    if p_start is not None:
+        P_START_CACHE[hour_key] = p_start
+    return p_start
+
+def get_p_start_from_binance_api_call(hour_start_utc):
+    """Performs the actual API call to Binance for kline data."""
     try:
         # Binance klines use milliseconds timestamps
         start_time_ms = int(hour_start_utc.timestamp() * 1000)
@@ -57,15 +88,35 @@ def get_p_start_from_binance(hour_start_utc):
             return None
 
         # kline format: [open_time, open, high, low, close, ...]
-        p_start = float(kline_data[0][1])
-        
-        # Store in cache and return
-        P_START_CACHE[hour_key] = p_start
-        return p_start
+        return float(kline_data[0][1])
 
     except Exception as e:
         print(f"Error getting p_start from Binance: {e}")
         return None
+
+def update_outcome_in_db(previous_hour_utc, outcome, p_start_previous, p_start_current):
+    """Updates all rows for a given hour with the resolved outcome."""
+    try:
+        _, market_name = get_market_token_id_for_hour(previous_hour_utc)
+        print(f"Outcome for '{market_name}' was '{outcome}' (p_start={p_start_previous}, p_end={p_start_current}). Updating database...")
+        
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        
+        hour_start_str = previous_hour_utc.strftime('%Y-%m-%d %H:%M:%S')
+        hour_end_str = (previous_hour_utc + timedelta(hours=1)).strftime('%Y-%m-%d %H:%M:%S')
+
+        cursor.execute("""
+            UPDATE polydata 
+            SET outcome = ? 
+            WHERE timestamp >= ? AND timestamp < ?
+        """, (outcome, hour_start_str, hour_end_str))
+        
+        conn.commit()
+        conn.close()
+        print(f"Successfully updated {cursor.rowcount} rows for the previous hour.")
+    except Exception as e:
+        print(f"Error updating outcome in database: {e}")
 
 def get_binance_data_and_ofi():
     """Fetch live BTC/USDT price and calculate order flow imbalance from recent trades."""
@@ -222,83 +273,6 @@ def get_market_token_id_for_hour(target_hour_dt_utc):
     except Exception as e:
         print(f"Error reading or processing CSV for token ID lookup: {e}")
         return None, None
-
-def check_and_update_outcome(current_time_utc):
-    """At the top of the hour, check the DB to determine the previous hour's market outcome."""
-    if current_time_utc.minute != 16:
-        return # Only run this logic at the top of the hour (e.g., 16:00)
-
-    print(f"({current_time_utc.strftime('%H:%M:%S')}) Checking outcome for market that just resolved...")
-    
-    # Determine the start and end of the previous hour
-    previous_hour_end_utc = current_time_utc.replace(minute=0, second=0, microsecond=0)
-    previous_hour_start_utc = previous_hour_end_utc - timedelta(hours=1)
-    
-    p_start = None
-    p_end = None
-    outcome = None
-
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-
-        # Get the first price at or after the start of the hour
-        cursor.execute("SELECT btc_usdt_spot FROM polydata WHERE timestamp >= ? ORDER BY timestamp ASC LIMIT 1", 
-                       (previous_hour_start_utc.strftime('%Y-%m-%d %H:%M:%S'),))
-        start_result = cursor.fetchone()
-        if start_result:
-            p_start = start_result[0]
-
-        # Get the last price just before the end of the hour
-        cursor.execute("SELECT btc_usdt_spot FROM polydata WHERE timestamp < ? ORDER BY timestamp DESC LIMIT 1", 
-                       (previous_hour_end_utc.strftime('%Y-%m-%d %H:%M:%S'),))
-        end_result = cursor.fetchone()
-        if end_result:
-            p_end = end_result[0]
-
-        conn.close()
-
-        print(f"--- Outcome Debug ---")
-        print(f"p_start for {previous_hour_start_utc.strftime('%Y-%m-%d %H:%M:%S')}: {p_start}")
-        print(f"p_end for {previous_hour_end_utc.strftime('%Y-%m-%d %H:%M:%S')}: {p_end}")
-        print(f"--- End Outcome Debug ---")
-
-        if p_start is not None and p_end is not None:
-            if p_end > p_start:
-                outcome = "UP"
-            elif p_end < p_start:
-                outcome = "DOWN"
-            else:
-                outcome = "FLAT" # Handle the rare case of no price change
-    
-    except Exception as e:
-        print(f"Error checking outcome from database: {e}")
-
-    if outcome:
-        # Get the market name for logging purposes
-        _, market_name = get_market_token_id_for_hour(previous_hour_start_utc)
-        print(f"Outcome for '{market_name}' was '{outcome}' (p_start={p_start}, p_end={p_end}). Updating database...")
-        try:
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
-            
-            # Define the time range for the update
-            start_str = previous_hour_start_utc.strftime('%Y-%m-%d %H:%M:%S')
-            end_str = previous_hour_end_utc.strftime('%Y-%m-%d %H:%M:%S')
-
-            cursor.execute("""
-                UPDATE polydata 
-                SET outcome = ? 
-                WHERE timestamp >= ? AND timestamp < ?
-            """, (outcome, start_str, end_str))
-            
-            conn.commit()
-            conn.close()
-            print(f"Successfully updated {cursor.rowcount} rows for the previous hour.")
-        except Exception as e:
-            print(f"Error updating outcome in database: {e}")
-    else:
-        print("Could not determine outcome due to missing Binance price data.")
 
 def parse_market_datetime(market_slug, market_question):
     """
@@ -518,9 +492,6 @@ def collect_data_once():
     try:
         t0 = datetime.now(UTC)
         print(f"({t0.strftime('%H:%M:%S.%f')}) --- Starting run ---")
-        
-        # At XX:01, check and update the outcome for the previous hour
-        check_and_update_outcome(t0)
         
         # Fetch the BTC spot price and OFI from Binance first
         btc_price, ofi = get_binance_data_and_ofi()
