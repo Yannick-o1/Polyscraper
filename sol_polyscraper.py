@@ -8,6 +8,7 @@ import sqlite3
 import lightgbm as lgb
 import numpy as np
 import os
+import time
 
 # --- Globals ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
