@@ -98,15 +98,14 @@ def calculate_live_prediction(bitcoin_df, current_timestamp, current_ofi):
         if tau <= 0:
             tau = 0.01
         
-        # Calculate 20-minute rolling volatility
+        # Calculate 20-minute rolling volatility on log returns
         df['lret'] = np.log(df['btc_usdt_spot']).diff()
-        vol_window = min(20, len(df) - 1)
         
-        if vol_window > 0:
-            recent_returns = df['lret'].tail(vol_window)
-            vol = recent_returns.std() * np.sqrt(60)
-        else:
-            vol = 0.0
+        # Use a rolling window of 20 periods (minutes) for std deviation
+        rolling_vol = df['lret'].rolling(window=20, min_periods=2).std()
+        
+        # Get the most recent volatility value and scale it to the hour
+        vol = rolling_vol.iloc[-1] * np.sqrt(60) if not rolling_vol.empty else 0.0
             
         if pd.isna(vol) or vol == 0:
             vol = 0.01
