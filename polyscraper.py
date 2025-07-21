@@ -91,7 +91,7 @@ def get_all_markets():
 def is_bitcoin_hourly_market(market):
     """Checks if a market is a Bitcoin hourly market based on its question."""
     q = market["question"].lower()
-    return "bitcoin up or down" in q and "pm et" in q
+    return "bitcoin up or down" in q and ("pm et" in q or "am et" in q)
 
 def update_markets_csv():
     """
