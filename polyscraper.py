@@ -12,8 +12,24 @@ CLOB_API_URL = "https://clob.polymarket.com"
 MARKETS_CSV_FILE = "btc_polymarkets.csv"
 DB_FILE = "polyscraper.db"
 
+def get_binance_btc_price():
+    """Fetches the current BTC/USDT spot price from Binance."""
+    url = "https://api.binance.com/api/v3/ticker/price"
+    params = {"symbol": "BTCUSDT"}
+    try:
+        response = requests.get(url, params=params, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        return float(data['price'])
+    except requests.RequestException as e:
+        print(f"Error fetching Binance price: {e}")
+        return None
+    except (KeyError, ValueError) as e:
+        print(f"Error parsing Binance price data: {e}")
+        return None
+
 def init_database():
-    """Initializes the database and creates the table if it doesn't exist."""
+    """Initializes the database and creates/updates the table if needed."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('''
@@ -26,6 +42,13 @@ def init_database():
             best_ask REAL NOT NULL
         )
     ''')
+    
+    # Check if the btc_usdt_spot column exists and add it if it doesn't
+    cursor.execute("PRAGMA table_info(polydata)")
+    columns = [column[1] for column in cursor.fetchall()]
+    if 'btc_usdt_spot' not in columns:
+        cursor.execute("ALTER TABLE polydata ADD COLUMN btc_usdt_spot REAL")
+
     conn.commit()
     conn.close()
 
@@ -252,6 +275,9 @@ def collect_data_once():
         t0 = datetime.now(UTC)
         print(f"({t0.strftime('%H:%M:%S.%f')}) --- Starting run ---")
         
+        # Fetch the BTC spot price from Binance first
+        btc_price = get_binance_btc_price()
+        
         token_id, market_name = get_current_market_token_id()
 
         t1 = datetime.now(UTC)
@@ -273,6 +299,7 @@ def collect_data_once():
             data_row = {
                 'timestamp': t0.strftime('%Y-%m-%d %H:%M:%S'),
                 'market_name': market_name,
+                'btc_usdt_spot': btc_price,
                 'token_id': token_id,
                 'best_bid': best_bid_price,
                 'best_ask': best_ask_price
@@ -283,14 +310,15 @@ def collect_data_once():
             conn = sqlite3.connect(DB_FILE)
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO polydata (timestamp, market_name, token_id, best_bid, best_ask)
-                VALUES (:timestamp, :market_name, :token_id, :best_bid, :best_ask)
+                INSERT INTO polydata (timestamp, market_name, token_id, best_bid, best_ask, btc_usdt_spot)
+                VALUES (:timestamp, :market_name, :token_id, :best_bid, :best_ask, :btc_usdt_spot)
             ''', data_row)
             conn.commit()
             conn.close()
 
             t3 = datetime.now(UTC)
-            print(f"({t3.strftime('%H:%M:%S.%f')}) Logged to DB. DB write took: {(t3-t2).total_seconds():.4f}s")
+            btc_price_str = f"{btc_price:.2f}" if btc_price is not None else "N/A"
+            print(f"({t3.strftime('%H:%M:%S.%f')}) Logged to DB: BTC={btc_price_str}, Bid={best_bid_price:.2f}, Ask={best_ask_price:.2f} for '{market_name}'")
             print(f"({t3.strftime('%H:%M:%S.%f')}) --- Total run time: {(t3-t0).total_seconds():.4f}s ---")
 
         else:
