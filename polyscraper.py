@@ -6,10 +6,28 @@ import time
 import os
 import re
 import csv
-import subprocess
+import sqlite3
 
 CLOB_API_URL = "https://clob.polymarket.com"
 MARKETS_CSV_FILE = "btc_polymarkets.csv"
+DB_FILE = "polyscraper.db"
+
+def init_database():
+    """Initializes the database and creates the table if it doesn't exist."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS polydata (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            market_name TEXT NOT NULL,
+            token_id TEXT NOT NULL,
+            best_bid REAL NOT NULL,
+            best_ask REAL NOT NULL
+        )
+    ''')
+    conn.commit()
+    conn.close()
 
 def parse_market_datetime(market_slug, market_question):
     """
@@ -228,43 +246,8 @@ def get_order_book(token_id):
         print(f"Error fetching order book for token {token_id}: {e}")
         return None, None
 
-def commit_and_push_changes(file_to_commit, commit_message):
-    """Commits and pushes changes for a specific file to the GitHub repository."""
-    try:
-        # Configure git user
-        subprocess.run(['git', 'config', '--global', 'user.email', 'action@github.com'], check=True)
-        subprocess.run(['git', 'config', '--global', 'user.name', 'Scraper Bot'], check=True)
-
-        # Add the specific file
-        subprocess.run(['git', 'add', file_to_commit], check=True)
-
-        # Check for changes before committing
-        status_result = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True)
-        if file_to_commit not in status_result.stdout:
-            print("No new data to commit.")
-            return
-
-        # Commit and push
-        subprocess.run(['git', 'commit', '-m', commit_message], check=True)
-        subprocess.run(['git', 'push'], check=True)
-        print(f"Successfully pushed changes for {file_to_commit}.")
-
-    except subprocess.CalledProcessError as e:
-        print(f"An error occurred during git operation: {e}")
-        # If push fails due to being behind remote, pull and try again
-        if "failed to push some refs" in str(e.stderr):
-            print("Remote has changes. Pulling before trying to push again.")
-            try:
-                subprocess.run(['git', 'pull', '--rebase'], check=True)
-                subprocess.run(['git', 'push'], check=True)
-                print("Successfully pushed changes after pulling.")
-            except subprocess.CalledProcessError as e2:
-                print(f"Failed to push even after pulling: {e2}")
-
 def collect_data_once():
-    """Collect data for one minute and log it to CSV."""
-    output_csv = 'btc_polydata.csv'
-
+    """Collect data for one minute and log it to the SQLite database."""
     try:
         current_timestamp = datetime.now(UTC)
         
@@ -288,19 +271,18 @@ def collect_data_once():
                 'best_ask': best_ask_price
             }
 
-            # Create a DataFrame to handle CSV writing
-            df_row = pd.DataFrame([data_row])
-            
-            # Append to CSV, write header if the file doesn't exist
-            header = not os.path.exists(output_csv)
-            df_row.to_csv(output_csv, mode='a', header=header, index=False)
+            # Ensure the database and table exist, then insert the new row
+            init_database()
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO polydata (timestamp, market_name, token_id, best_bid, best_ask)
+                VALUES (:timestamp, :market_name, :token_id, :best_bid, :best_ask)
+            ''', data_row)
+            conn.commit()
+            conn.close()
 
-            print(f"({data_row['timestamp']}) Logged: Bid={best_bid_price:.2f}, Ask={best_ask_price:.2f} for '{market_name}'")
-            
-            # Commit and push the newly added data
-            commit_message = f"Update BTC polydata - {data_row['timestamp']}"
-            commit_and_push_changes(output_csv, commit_message)
-
+            print(f"({data_row['timestamp']}) Logged to DB: Bid={best_bid_price:.2f}, Ask={best_ask_price:.2f} for '{market_name}'")
         else:
             print(f"({current_timestamp.strftime('%H:%M:%S')}) Could not retrieve valid order book for '{market_name}'")
 
