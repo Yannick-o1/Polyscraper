@@ -14,7 +14,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CLOB_API_URL = "https://clob.polymarket.com"
 MARKETS_CSV_FILE = os.path.join(BASE_DIR, "eth_polymarkets.csv")
 DB_FILE = os.path.join(BASE_DIR, "eth_polyscraper.db")
-MODEL_FILE = os.path.join(BASE_DIR, "btc_lgbm.txt")
+MODEL_FILE = os.path.join(BASE_DIR, "eth_lgbm.txt")
 
 # Load the LightGBM model once when the script starts
 try:
@@ -169,69 +169,68 @@ def get_binance_data_and_ofi():
 
 def calculate_live_prediction(historical_df, current_timestamp, current_ofi, p_start, current_price):
     """Calculate prediction using live data instead of historical lookup"""
-    # try:
-    #     if p_start is None or current_price is None:
-    #         return None
+    try:
+        if p_start is None or current_price is None:
+            return None
             
-    #     df = historical_df.copy()
+        df = historical_df.copy()
         
-    #     # Ensure 'timestamp' is the index and it's a datetime object
-    #     if 'timestamp' in df.columns:
-    #         # Tell pandas to interpret the timestamps as UTC
-    #         df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
-    #         df = df.set_index('timestamp')
+        # Ensure 'timestamp' is the index and it's a datetime object
+        if 'timestamp' in df.columns:
+            # Tell pandas to interpret the timestamps as UTC
+            df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
+            df = df.set_index('timestamp')
         
-    #     df = df.sort_index()
+        df = df.sort_index()
         
-    #     # Remove rows with missing prices
-    #     df = df.dropna(subset=['eth_usdt_spot'])
-    #     if len(df) < 2:
-    #         return None
+        # Remove rows with missing prices
+        df = df.dropna(subset=['eth_usdt_spot'])
+        if len(df) < 2:
+            return None
         
-    #     r = current_price / p_start - 1
+        r = current_price / p_start - 1
         
-    #     current_minute = pd.to_datetime(current_timestamp).minute
-    #     tau = 1 - (current_minute / 60)
+        current_minute = pd.to_datetime(current_timestamp).minute
+        tau = 1 - (current_minute / 60)
         
-    #     if tau <= 0:
-    #         tau = 0.01
+        if tau <= 0:
+            tau = 0.01
         
-    #     # Calculate 20-minute rolling volatility on log returns
-    #     df['lret'] = np.log(df['eth_usdt_spot']).diff()
+        # Calculate 20-minute rolling volatility on log returns
+        df['lret'] = np.log(df['eth_usdt_spot']).diff()
         
-    #     # Use a rolling window of 20 periods (minutes) for std deviation
-    #     rolling_vol = df['lret'].rolling(window=20, min_periods=2).std()
+        # Use a rolling window of 20 periods (minutes) for std deviation
+        rolling_vol = df['lret'].rolling(window=20, min_periods=2).std()
         
-    #     # Get the most recent volatility value and scale it to the hour
-    #     vol = rolling_vol.iloc[-1] * np.sqrt(60) if not rolling_vol.empty else 0.0
+        # Get the most recent volatility value and scale it to the hour
+        vol = rolling_vol.iloc[-1] * np.sqrt(60) if not rolling_vol.empty else 0.0
             
-    #     if pd.isna(vol) or vol == 0:
-    #         vol = 0.01
+        if pd.isna(vol) or vol == 0:
+            vol = 0.01
             
-    #     r_scaled = r / np.sqrt(tau)
+        r_scaled = r / np.sqrt(tau)
         
-    #     ofi = current_ofi if current_ofi is not None else 0.0
+        ofi = current_ofi if current_ofi is not None else 0.0
         
-    #     # --- Diagnostic Logging ---
-    #     print("--- Prediction Feature Calculation ---")
-    #     print(f"p_start: {p_start}, current_price: {current_price}")
-    #     print(f"r: {r:.6f}, tau: {tau:.4f}, vol: {vol:.6f}, ofi: {ofi:.4f}")
-    #     print(f"r_scaled: {r_scaled:.6f}")
-    #     # --- End Diagnostic Logging ---
+        # --- Diagnostic Logging ---
+        print("--- Prediction Feature Calculation ---")
+        print(f"p_start: {p_start}, current_price: {current_price}")
+        print(f"r: {r:.6f}, tau: {tau:.4f}, vol: {vol:.6f}, ofi: {ofi:.4f}")
+        print(f"r_scaled: {r_scaled:.6f}")
+        # --- End Diagnostic Logging ---
 
-    #     if pd.isna([r_scaled, tau, vol, ofi]).any():
-    #         print("One of the features is NaN, skipping prediction.")
-    #         return None
+        if pd.isna([r_scaled, tau, vol, ofi]).any():
+            print("One of the features is NaN, skipping prediction.")
+            return None
             
-    #     X_live = [[r_scaled, tau, vol, ofi]]
-    #     p_up = model.predict(X_live)[0]
+        X_live = [[r_scaled, tau, vol, ofi]]
+        p_up = model.predict(X_live)[0]
         
-    #     return p_up
+        return p_up
         
-    # except Exception as e:
-    #     print(f"\nError calculating live prediction: {e}")
-    #     return None
-    return 0.0
+    except Exception as e:
+        print(f"\nError calculating live prediction: {e}")
+        return None
 
 def init_database():
     """Initializes the database and creates/updates the table if needed."""
