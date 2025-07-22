@@ -81,7 +81,7 @@ DATA_VIEWER_TEMPLATE = """
 <body>
     <a href="{{ url_for('home') }}">Back to Home</a>
     <h1>Latest {{ currency_name }} Data</h1>
-    <p>Displaying the 100 most recent entries, ordered by timestamp.</p>
+    <p>Displaying the 250 most recent entries, ordered by timestamp.</p>
     <table>
         <thead>
             <tr>
@@ -140,7 +140,7 @@ def run_scraper(currency):
 
 @app.route('/view/<currency>', methods=['GET'])
 def view_data(currency):
-    """Displays the last 100 entries from the database for a specific currency."""
+    """Displays the last 250 entries from the database for a specific currency."""
     if currency not in CURRENCIES:
         return "<h1>Invalid Currency</h1>", 404
 
@@ -158,7 +158,7 @@ def view_data(currency):
         if cursor.fetchone() is None:
             return f"<h1>Data not available yet</h1><p>The table 'polydata' does not exist in {config['db_file']}. Please run the scraper for {config['name']}.</p>", 404
         
-        query = f"SELECT timestamp, market_name, best_bid, best_ask, {spot_price_column} as spot_price, ofi, p_up_prediction, outcome FROM polydata ORDER BY timestamp DESC LIMIT 100"
+        query = f"SELECT timestamp, market_name, best_bid, best_ask, {spot_price_column} as spot_price, ofi, p_up_prediction, outcome FROM polydata ORDER BY timestamp DESC LIMIT 250"
         cursor.execute(query)
         data = cursor.fetchall()
         
