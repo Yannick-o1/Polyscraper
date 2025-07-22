@@ -8,6 +8,13 @@ app = Flask(__name__)
 # Get the absolute path of the directory where this script is located
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# Custom filter for formatting with dynamic decimal places
+@app.template_filter('format_price')
+def format_price(value, decimals):
+    if value is None:
+        return 'N/A'
+    return f"{value:.{decimals}f}"
+
 # --- Configuration for multiple currencies ---
 CURRENCIES = {
     'btc': {
@@ -95,7 +102,7 @@ DATA_VIEWER_TEMPLATE = """
                 <td>{{ row.timestamp }}</td>
                 <td>{{ row.market_name }}</td>
                 <td>{{ row.outcome if row.outcome else 'N/A' }}</td>
-                <td>{{ ("{:.%df}" % spot_decimals)|format(row.spot_price) if row.spot_price is not none else 'N/A' }}</td>
+                <td>{{ row.spot_price|format_price(spot_decimals) }}</td>
                 <td>{{ "%.4f"|format(row.ofi) if row.ofi is not none else 'N/A' }}</td>
                 <td>{{ "%.2f"|format(row.p_up_prediction * 100) if row.p_up_prediction is not none else 'N/A' }}</td>
                 <td>{{ "%.0f"|format(row.best_bid * 100) if row.best_bid is not none else 'N/A' }}</td>
