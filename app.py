@@ -13,22 +13,26 @@ CURRENCIES = {
     'btc': {
         'name': 'Bitcoin',
         'scraper_script': 'polyscraper.py',
-        'db_file': 'polyscraper.db'
+        'db_file': 'polyscraper.db',
+        'spot_decimals': 2
     },
     'sol': {
         'name': 'Solana',
         'scraper_script': 'sol_polyscraper.py',
-        'db_file': 'sol_polyscraper.db'
+        'db_file': 'sol_polyscraper.db',
+        'spot_decimals': 3
     },
     'xrp': {
         'name': 'XRP',
         'scraper_script': 'xrp_polyscraper.py',
-        'db_file': 'xrp_polyscraper.db'
+        'db_file': 'xrp_polyscraper.db',
+        'spot_decimals': 4
     },
     'eth': {
         'name': 'Ethereum',
         'scraper_script': 'eth_polyscraper.py',
-        'db_file': 'eth_polyscraper.db'
+        'db_file': 'eth_polyscraper.db',
+        'spot_decimals': 3
     }
 }
 
@@ -91,7 +95,7 @@ DATA_VIEWER_TEMPLATE = """
                 <td>{{ row.timestamp }}</td>
                 <td>{{ row.market_name }}</td>
                 <td>{{ row.outcome if row.outcome else 'N/A' }}</td>
-                <td>{{ "%.2f"|format(row.spot_price) if row.spot_price is not none else 'N/A' }}</td>
+                <td>{{ ("{:.%df}" % spot_decimals)|format(row.spot_price) if row.spot_price is not none else 'N/A' }}</td>
                 <td>{{ "%.4f"|format(row.ofi) if row.ofi is not none else 'N/A' }}</td>
                 <td>{{ "%.2f"|format(row.p_up_prediction * 100) if row.p_up_prediction is not none else 'N/A' }}</td>
                 <td>{{ "%.0f"|format(row.best_bid * 100) if row.best_bid is not none else 'N/A' }}</td>
@@ -153,7 +157,7 @@ def view_data(currency):
         
         conn.close()
         
-        return render_template_string(DATA_VIEWER_TEMPLATE, data=data, currency_name=config['name'])
+        return render_template_string(DATA_VIEWER_TEMPLATE, data=data, currency_name=config['name'], spot_decimals=config['spot_decimals'])
     except sqlite3.OperationalError as e:
         if "no such column" in str(e):
              return f"<h1>Data not available yet</h1><p>The column '{spot_price_column}' does not exist yet. Please run the scraper for {config['name']}.</p>", 404
