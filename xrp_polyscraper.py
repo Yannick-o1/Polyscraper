@@ -113,7 +113,7 @@ def get_p_start_from_binance_api_call(hour_start_utc):
 def update_outcome_in_db(previous_hour_utc, outcome, p_start_previous, p_start_current):
     """Updates all rows for a given hour with the resolved outcome."""
     try:
-        _, market_name = get_market_token_id_for_hour(previous_hour_utc)
+        _, market_name = get_market_token_id_for_hour(previous_hour_utc, auto_update=False)
         print(f"Outcome for '{market_name}' was '{outcome}' (p_start={p_start_previous}, p_end={p_start_current}). Updating database...")
         
         conn = sqlite3.connect(DB_FILE)
@@ -271,7 +271,7 @@ def init_database():
     conn.commit()
     conn.close()
 
-def get_market_token_id_for_hour(target_hour_dt_utc):
+def get_market_token_id_for_hour(target_hour_dt_utc, auto_update=True):
     """Find the token ID for the market corresponding to a specific hour."""
     try:
         markets_df = pd.read_csv(MARKETS_CSV_FILE)
@@ -283,6 +283,11 @@ def get_market_token_id_for_hour(target_hour_dt_utc):
         matching_rows = markets_df[markets_df['date_time'] == target_datetime_str]
         
         if matching_rows.empty:
+            if auto_update:
+                print(f"No market found for {target_datetime_str}. Auto-updating markets...")
+                update_markets_csv()
+                # Retry once after updating markets
+                return get_market_token_id_for_hour(target_hour_dt_utc, auto_update=False)
             return None, None
         
         market_row = matching_rows.iloc[0]
@@ -292,6 +297,11 @@ def get_market_token_id_for_hour(target_hour_dt_utc):
         return token_id, market_name
         
     except FileNotFoundError:
+        if auto_update:
+            print(f"Error: '{MARKETS_CSV_FILE}' not found. Auto-updating markets...")
+            update_markets_csv()
+            # Retry once after updating markets
+            return get_market_token_id_for_hour(target_hour_dt_utc, auto_update=False)
         print(f"Error: '{MARKETS_CSV_FILE}' not found.")
         return None, None
     except Exception as e:
