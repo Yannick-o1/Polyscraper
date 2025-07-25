@@ -32,8 +32,8 @@ MODEL_FILE = os.path.join(BASE_DIR, "eth_lgbm.txt")
 POLYMARKET_PRIVATE_KEY = os.getenv("POLYMARKET_PRIVATE_KEY", "")  # Your private key
 POLYMARKET_PROXY_ADDRESS = os.getenv("POLYMARKET_PROXY_ADDRESS", "")  # Your proxy wallet address
 POLYMARKET_CHAIN_ID = 137  # Polygon mainnet
-PROBABILITY_DELTA_THRESHOLD = 12.0  # 12 percentage points
-ORDER_SIZE_USD = 5.0  # Order size in USD
+PROBABILITY_DELTA_THRESHOLD = 10.0  # 12 percentage points
+ORDER_SIZE_USD = 4.0  # Order size in USD
 
 # Initialize Polymarket client
 polymarket_client = None
