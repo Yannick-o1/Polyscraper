@@ -32,7 +32,7 @@ MODEL_FILE = os.path.join(BASE_DIR, "eth_lgbm.txt")
 POLYMARKET_PRIVATE_KEY = os.getenv("POLYMARKET_PRIVATE_KEY", "")  # Your private key
 POLYMARKET_PROXY_ADDRESS = os.getenv("POLYMARKET_PROXY_ADDRESS", "")  # Your proxy wallet address
 POLYMARKET_CHAIN_ID = 137  # Polygon mainnet
-PROBABILITY_DELTA_THRESHOLD = 0.12  # 12 percentage points
+PROBABILITY_DELTA_THRESHOLD = 12.0  # 12 percentage points
 ORDER_SIZE_USD = 5.0  # Order size in USD
 
 # Initialize Polymarket client
@@ -713,10 +713,11 @@ def collect_data_once():
             # --- Order Placement Logic ---
             if p_up_prediction is not None and best_bid_price is not None and best_ask_price is not None:
                 midpoint = (best_bid_price + best_ask_price) / 2
-                delta = p_up_prediction - midpoint
+                # Calculate delta in percentage points
+                delta = (p_up_prediction - midpoint) * 100
                 abs_delta = abs(delta)
 
-                print(f"Delta calculation: prediction={p_up_prediction:.4f}, midpoint={midpoint:.4f}, delta={delta:.4f}")
+                print(f"Delta calculation: prediction={p_up_prediction:.4f}, midpoint={midpoint:.4f}, delta={delta:.2f}")
 
                 if abs_delta > PROBABILITY_DELTA_THRESHOLD:
                     # Place the order at the current market midpoint
@@ -725,7 +726,7 @@ def collect_data_once():
                     # Determine direction based on the delta
                     direction = "UP" if delta > 0 else "DOWN"
 
-                    print(f"🚨 Delta threshold exceeded! |{delta:.4f}| > {PROBABILITY_DELTA_THRESHOLD}")
+                    print(f"🚨 Delta threshold exceeded! |{delta:.2f}| > {PROBABILITY_DELTA_THRESHOLD}")
                     print(f"Attempting to place {direction} order at ${order_price:.2f}")
 
                     success = place_polymarket_order(token_id, direction, order_price, ORDER_SIZE_USD)
@@ -734,7 +735,7 @@ def collect_data_once():
                     else:
                         print(f"❌ Order placement failed for ETH")
                 else:
-                    print(f"Delta {delta:.4f} below threshold {PROBABILITY_DELTA_THRESHOLD}, no order placed")
+                    print(f"Delta {delta:.2f} below threshold {PROBABILITY_DELTA_THRESHOLD}, no order placed")
             # --- End Order Placement Logic ---
 
             t3 = datetime.now(UTC)
