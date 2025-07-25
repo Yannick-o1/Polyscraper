@@ -92,8 +92,8 @@ def place_polymarket_order(token_id, direction, price, size_usd=ORDER_SIZE_USD):
             print(f"Invalid order size: {size_shares}")
             return False
         
-        # Create order with 1-minute expiration (GTD)
-        expiration = int((datetime.now(UTC) + timedelta(minutes=1)).timestamp())
+        # Create order with a 2-minute expiration to avoid threshold issues
+        expiration = int((datetime.now(UTC) + timedelta(minutes=2)).timestamp())
         
         order_args = OrderArgs(
             price=price,
