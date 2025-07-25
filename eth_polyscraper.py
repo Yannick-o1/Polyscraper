@@ -32,8 +32,8 @@ MODEL_FILE = os.path.join(BASE_DIR, "eth_lgbm.txt")
 POLYMARKET_PRIVATE_KEY = os.getenv("POLYMARKET_PRIVATE_KEY", "")  # Your private key
 POLYMARKET_PROXY_ADDRESS = os.getenv("POLYMARKET_PROXY_ADDRESS", "")  # Your proxy wallet address
 POLYMARKET_CHAIN_ID = 137  # Polygon mainnet
-DELTA_THRESHOLD = 12.0  # Minimum price change in dollars to trigger order
-ORDER_SIZE_USD = 4.0  # Order size in USD
+PROBABILITY_DELTA_THRESHOLD = 0.12  # 12 percentage points
+ORDER_SIZE_USD = 5.0  # Order size in USD
 
 # Initialize Polymarket client
 polymarket_client = None
@@ -711,30 +711,30 @@ def collect_data_once():
             conn.close()
 
             # --- Order Placement Logic ---
-            if eth_price is not None and p_start is not None:
-                delta = eth_price - p_start
+            if p_up_prediction is not None and best_bid_price is not None and best_ask_price is not None:
+                midpoint = (best_bid_price + best_ask_price) / 2
+                delta = p_up_prediction - midpoint
                 abs_delta = abs(delta)
-                
-                print(f"Delta calculation: current_price={eth_price:.2f}, p_start={p_start:.2f}, delta={delta:.2f}")
-                
-                if abs_delta > DELTA_THRESHOLD:
-                    # Calculate midpoint price and round to nearest cent
-                    midpoint = (best_bid_price + best_ask_price) / 2
+
+                print(f"Delta calculation: prediction={p_up_prediction:.4f}, midpoint={midpoint:.4f}, delta={delta:.4f}")
+
+                if abs_delta > PROBABILITY_DELTA_THRESHOLD:
+                    # Place the order at the current market midpoint
                     order_price = round(midpoint, 2)
-                    
-                    # Determine direction
+
+                    # Determine direction based on the delta
                     direction = "UP" if delta > 0 else "DOWN"
-                    
-                    print(f"🚨 Delta threshold exceeded! |{delta:.2f}| > {DELTA_THRESHOLD}")
-                    print(f"Attempting to place {direction} order at ${order_price:.2f} (midpoint of {best_bid_price:.2f}-{best_ask_price:.2f})")
-                    
+
+                    print(f"🚨 Delta threshold exceeded! |{delta:.4f}| > {PROBABILITY_DELTA_THRESHOLD}")
+                    print(f"Attempting to place {direction} order at ${order_price:.2f}")
+
                     success = place_polymarket_order(token_id, direction, order_price, ORDER_SIZE_USD)
                     if success:
                         print(f"✅ Order placement successful for ETH")
                     else:
                         print(f"❌ Order placement failed for ETH")
                 else:
-                    print(f"Delta {delta:.2f} below threshold {DELTA_THRESHOLD}, no order placed")
+                    print(f"Delta {delta:.4f} below threshold {PROBABILITY_DELTA_THRESHOLD}, no order placed")
             # --- End Order Placement Logic ---
 
             t3 = datetime.now(UTC)
