@@ -100,12 +100,13 @@ def place_polymarket_order(token_id, direction, price, size_usd=ORDER_SIZE_USD):
             size=size_shares,
             side=side,
             token_id=token_id,
+            expiration=expiration
         )
         
         signed_order = polymarket_client.create_order(order_args)
         
-        # Place GTD order with 1-minute expiration
-        response = polymarket_client.post_order(signed_order, OrderType.GTD, expiration)
+        # Place GTD order
+        response = polymarket_client.post_order(signed_order, OrderType.GTD)
         
         if response.get('success', False):
             print(f"✅ Order placed successfully: {direction} {size_shares:.2f} shares at ${price:.2f} (${size_usd} total)")
