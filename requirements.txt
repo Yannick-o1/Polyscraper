@@ -2,4 +2,5 @@ pandas
 requests
 Flask
 lightgbm
-numpy 
+numpy
+py-clob-client 

@@ -10,12 +10,51 @@ import numpy as np
 import os
 import time
 
+# Polymarket imports
+try:
+    from py_clob_client.client import ClobClient
+    from py_clob_client.clob_types import OrderArgs, OrderType
+    from py_clob_client.order_builder.constants import BUY, SELL
+    POLYMARKET_AVAILABLE = True
+except ImportError:
+    print("Warning: py-clob-client not installed. Order placement will be disabled.")
+    POLYMARKET_AVAILABLE = False
+
 # --- Globals ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CLOB_API_URL = "https://clob.polymarket.com"
 MARKETS_CSV_FILE = os.path.join(BASE_DIR, "btc_polymarkets.csv")
 DB_FILE = os.path.join(BASE_DIR, "polyscraper.db")
 MODEL_FILE = os.path.join(BASE_DIR, "btc_lgbm.txt")
+
+# --- Polymarket Configuration ---
+# Set these environment variables or modify directly:
+POLYMARKET_PRIVATE_KEY = os.getenv("POLYMARKET_PRIVATE_KEY", "")  # Your private key
+POLYMARKET_PROXY_ADDRESS = os.getenv("POLYMARKET_PROXY_ADDRESS", "")  # Your proxy wallet address
+POLYMARKET_CHAIN_ID = 137  # Polygon mainnet
+DELTA_THRESHOLD = 12.0  # Minimum price change in dollars to trigger order
+ORDER_SIZE_USD = 4.0  # Order size in USD
+
+# Initialize Polymarket client
+polymarket_client = None
+if POLYMARKET_AVAILABLE and POLYMARKET_PRIVATE_KEY and POLYMARKET_PROXY_ADDRESS:
+    try:
+        polymarket_client = ClobClient(
+            host=CLOB_API_URL,
+            key=POLYMARKET_PRIVATE_KEY,
+            chain_id=POLYMARKET_CHAIN_ID,
+            signature_type=1,  # For email/magic accounts, use 2 for browser wallets
+            funder=POLYMARKET_PROXY_ADDRESS
+        )
+        polymarket_client.set_api_creds(polymarket_client.create_or_derive_api_creds())
+        print("Polymarket client initialized successfully")
+    except Exception as e:
+        print(f"Failed to initialize Polymarket client: {e}")
+        polymarket_client = None
+elif POLYMARKET_AVAILABLE:
+    print("Polymarket credentials not provided. Set POLYMARKET_PRIVATE_KEY and POLYMARKET_PROXY_ADDRESS environment variables to enable order placement.")
+else:
+    print("Polymarket functionality disabled.")
 
 # Load the LightGBM model once when the script starts
 try:
@@ -24,6 +63,60 @@ except Exception as e:
     print(f"Error loading model file '{MODEL_FILE}': {e}")
     print("Predictions will be disabled.")
     model = None
+
+def place_polymarket_order(token_id, direction, price, size_usd=ORDER_SIZE_USD):
+    """
+    Place an order on Polymarket.
+    
+    Args:
+        token_id (str): The token ID for the market
+        direction (str): "UP" for buy, "DOWN" for sell
+        price (float): Order price (0-1 range)
+        size_usd (float): Order size in USD
+    
+    Returns:
+        bool: True if order placed successfully, False otherwise
+    """
+    if not polymarket_client:
+        print("Polymarket client not available")
+        return False
+    
+    try:
+        # Convert direction to side
+        side = BUY if direction == "UP" else SELL
+        
+        # Calculate order size in shares
+        size_shares = size_usd / price if price > 0 else 0
+        
+        if size_shares <= 0:
+            print(f"Invalid order size: {size_shares}")
+            return False
+        
+        # Create order with 1-minute expiration (GTD)
+        expiration = int((datetime.now(UTC) + timedelta(minutes=1)).timestamp())
+        
+        order_args = OrderArgs(
+            price=price,
+            size=size_shares,
+            side=side,
+            token_id=token_id,
+        )
+        
+        signed_order = polymarket_client.create_order(order_args)
+        
+        # Place GTD order with 1-minute expiration
+        response = polymarket_client.post_order(signed_order, OrderType.GTD, expiration)
+        
+        if response.get('success', False):
+            print(f"✅ Order placed successfully: {direction} {size_shares:.2f} shares at ${price:.2f} (${size_usd} total)")
+            return True
+        else:
+            print(f"❌ Order failed: {response.get('errorMsg', 'Unknown error')}")
+            return False
+            
+    except Exception as e:
+        print(f"Error placing Polymarket order: {e}")
+        return False
 
 def get_p_start_from_binance(hour_start_utc):
     """
@@ -616,6 +709,33 @@ def collect_data_once():
             ''', data_row)
             conn.commit()
             conn.close()
+
+            # --- Order Placement Logic ---
+            if btc_price is not None and p_start is not None:
+                delta = btc_price - p_start
+                abs_delta = abs(delta)
+                
+                print(f"Delta calculation: current_price={btc_price:.2f}, p_start={p_start:.2f}, delta={delta:.2f}")
+                
+                if abs_delta > DELTA_THRESHOLD:
+                    # Calculate midpoint price and round to nearest cent
+                    midpoint = (best_bid_price + best_ask_price) / 2
+                    order_price = round(midpoint, 2)
+                    
+                    # Determine direction
+                    direction = "UP" if delta > 0 else "DOWN"
+                    
+                    print(f"🚨 Delta threshold exceeded! |{delta:.2f}| > {DELTA_THRESHOLD}")
+                    print(f"Attempting to place {direction} order at ${order_price:.2f} (midpoint of {best_bid_price:.2f}-{best_ask_price:.2f})")
+                    
+                    success = place_polymarket_order(token_id, direction, order_price, ORDER_SIZE_USD)
+                    if success:
+                        print(f"✅ Order placement successful for BTC")
+                    else:
+                        print(f"❌ Order placement failed for BTC")
+                else:
+                    print(f"Delta {delta:.2f} below threshold {DELTA_THRESHOLD}, no order placed")
+            # --- End Order Placement Logic ---
 
             t3 = datetime.now(UTC)
             btc_price_str = f"{btc_price:.2f}" if btc_price is not None else "N/A"
