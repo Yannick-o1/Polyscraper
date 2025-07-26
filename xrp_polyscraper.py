@@ -26,9 +26,10 @@ CLOB_API_URL = "https://clob.polymarket.com"
 MARKETS_CSV_FILE = os.path.join(BASE_DIR, "xrp_polymarkets.csv")
 DB_FILE = os.path.join(BASE_DIR, "xrp_polyscraper.db")
 MODEL_FILE = os.path.join(BASE_DIR, "xrp_lgbm.txt")
+ASSET_SYMBOL = "XRPUSDT"
 
 # --- Polymarket Configuration ---
-TRADING_ENABLED = False  # SET TO True TO ENABLE LIVE TRADING
+TRADING_ENABLED = True  # SET TO True TO ENABLE LIVE TRADING
 # Set these environment variables or modify directly:
 POLYMARKET_PRIVATE_KEY = os.getenv("POLYMARKET_PRIVATE_KEY", "")  # Your private key
 POLYMARKET_PROXY_ADDRESS = os.getenv("POLYMARKET_PROXY_ADDRESS", "")  # Your proxy wallet address
