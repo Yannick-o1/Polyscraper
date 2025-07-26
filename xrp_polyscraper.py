@@ -80,6 +80,31 @@ except Exception as e:
     print("Predictions will be disabled.")
     model = None
 
+# --- In-Memory Position State ---
+# This will hold the current net position for the tokens in the active market.
+# It will be reset when the market (and thus token IDs) changes.
+current_positions = {
+    "token_id_yes": None,
+    "shares_yes": 0.0,
+    "token_id_no": None,
+    "shares_no": 0.0,
+}
+
+def update_local_position(token_id, side, size_shares):
+    """Updates the in-memory position state after a trade."""
+    global current_positions
+    if token_id == current_positions["token_id_yes"]:
+        if side == BUY:
+            current_positions["shares_yes"] += size_shares
+        elif side == SELL:
+            current_positions["shares_yes"] -= size_shares
+    elif token_id == current_positions["token_id_no"]:
+        if side == BUY:
+            current_positions["shares_no"] += size_shares
+        elif side == SELL:
+            current_positions["shares_no"] -= size_shares
+    print(f"  --> Updated local state: YES shares={current_positions['shares_yes']:.4f}, NO shares={current_positions['shares_no']:.4f}")
+
 def place_order(side, token_id, price, size_usd):
     """
     Places a BUY or SELL order on Polymarket.
@@ -105,9 +130,8 @@ def place_order(side, token_id, price, size_usd):
     try:
         # Calculate order size in shares
         order_price = round(price, 2)
-        if order_price <= 0:
-            print(f"  --> Invalid order price: {order_price}")
-            return False
+        if order_price <= 0.01: # Prevent division by zero or tiny price
+            order_price = 0.01
             
         size_shares = size_usd / order_price
 
@@ -128,6 +152,8 @@ def place_order(side, token_id, price, size_usd):
         
         if response.get('success', False):
             print(f"  --> ✅ Order placed: {side} {size_shares:.2f} shares of token {token_id} at ${order_price:.2f} (${size_usd:.2f} total)")
+            # Update local position state on successful trade
+            update_local_position(token_id, side, size_shares)
             return True
         else:
             print(f"  --> ❌ Order failed: {response.get('errorMsg', 'Unknown error')}")
@@ -788,9 +814,21 @@ def get_positions_from_data_api():
 
 
 def get_user_state(token_id_yes, token_id_no):
-    """Fetches user's USDC balance and positions in the given market."""
+    """Fetches user's USDC balance and positions from local state."""
+    global current_positions
     if not polymarket_client:
         return None, None, None
+    
+    # Reset local state if the market has changed
+    if token_id_yes != current_positions["token_id_yes"]:
+        print("--- New market detected, resetting local position state. ---")
+        current_positions = {
+            "token_id_yes": token_id_yes,
+            "shares_yes": 0.0,
+            "token_id_no": token_id_no,
+            "shares_no": 0.0,
+        }
+
     try:
         # Correctly fetch the USDC balance using the verified method and parameters
         balance_params = BalanceAllowanceParams(
@@ -800,24 +838,9 @@ def get_user_state(token_id_yes, token_id_no):
         # The balance is returned in the smallest unit (6 decimals), so we divide by 1,000,000.0
         usdc_balance = float(account_info["balance"]) / 1_000_000.0
         
-        # Get positions from the reliable Data API
-        all_positions = get_positions_from_data_api()
+        # Return positions from our in-memory state
+        return usdc_balance, current_positions["shares_yes"], current_positions["shares_no"]
 
-        # If fetching positions fails, we can't know the state, so abort.
-        if all_positions is None:
-            print("-> Could not retrieve positions from Data API. Aborting state update.")
-            return None, None, None
-        
-        position_yes = 0.0
-        position_no = 0.0
-
-        for pos in all_positions:
-            if pos.get("token_id") == token_id_yes:
-                position_yes = float(pos.get("net_quantity", 0.0))
-            elif pos.get("token_id") == token_id_no:
-                position_no = float(pos.get("net_quantity", 0.0))
-
-        return usdc_balance, position_yes, position_no
     except Exception as e:
         print(f"Error getting user state: {e}")
         return None, None, None
