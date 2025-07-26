@@ -372,12 +372,14 @@ def init_database():
         cursor.execute("ALTER TABLE polydata ADD COLUMN p_up_prediction REAL")
     if 'outcome' not in columns:
         cursor.execute("ALTER TABLE polydata ADD COLUMN outcome TEXT")
+    if 'outcome_xrp' not in columns:
+        cursor.execute("ALTER TABLE polydata ADD COLUMN outcome_xrp TEXT")
 
     conn.commit()
     conn.close()
 
-def get_market_token_id_for_hour(target_hour_dt_utc, auto_update=True):
-    """Find the token ID for the market corresponding to a specific hour."""
+def get_market_token_ids_for_hour(target_hour_dt_utc, auto_update=True):
+    """Find the token IDs for the market corresponding to a specific hour."""
     try:
         markets_df = pd.read_csv(MARKETS_CSV_FILE)
         et_tz = ZoneInfo("America/New_York")
@@ -392,26 +394,27 @@ def get_market_token_id_for_hour(target_hour_dt_utc, auto_update=True):
                 print(f"No market found for {target_datetime_str}. Auto-updating markets...")
                 update_markets_csv()
                 # Retry once after updating markets
-                return get_market_token_id_for_hour(target_hour_dt_utc, auto_update=False)
-            return None, None
+                return get_market_token_ids_for_hour(target_hour_dt_utc, auto_update=False)
+            return None, None, None
         
         market_row = matching_rows.iloc[0]
-        token_id = str(int(market_row['token_id']))
+        token_id_yes = str(int(market_row['token_id_yes']))
+        token_id_no = str(int(market_row['token_id_no']))
         market_name = market_row['market_name']
         
-        return token_id, market_name
+        return token_id_yes, token_id_no, market_name
         
     except FileNotFoundError:
         if auto_update:
             print(f"Error: '{MARKETS_CSV_FILE}' not found. Auto-updating markets...")
             update_markets_csv()
             # Retry once after updating markets
-            return get_market_token_id_for_hour(target_hour_dt_utc, auto_update=False)
+            return get_market_token_ids_for_hour(target_hour_dt_utc, auto_update=False)
         print(f"Error: '{MARKETS_CSV_FILE}' not found.")
-        return None, None
+        return None, None, None
     except Exception as e:
         print(f"Error reading or processing CSV for token ID lookup: {e}")
-        return None, None
+        return None, None, None
 
 def parse_market_datetime(market_slug, market_question):
     """
@@ -516,20 +519,22 @@ def update_markets_csv():
         
         # Get the first token (assuming there are typically 2 tokens for yes/no)
         if m.get("tokens") and len(m["tokens"]) > 0:
-            token_id = m["tokens"][0].get("token_id")
+            token_id_yes = m["tokens"][0].get("token_id")
+            token_id_no = m["tokens"][1].get("token_id") # Assuming the second token is the NO token
         else:
-            token_id = None
+            token_id_yes = None
+            token_id_no = None
         
         # Parse the date from the market
         parsed_date = parse_market_datetime(slug, question)
         
         print(f"Found market {xrp_market_count}: {slug}")
         print(f"  Question: {question}")
-        print(f"  Token ID: {token_id}")
+        print(f"  Token ID: {token_id_yes}")
         print(f"  Parsed Date: {parsed_date}")
         
         # Reject markets with missing essential data
-        if not slug or not question or not token_id or parsed_date == "Could not parse date":
+        if not slug or not question or not token_id_yes or not token_id_no or parsed_date == "Could not parse date":
             print(f"  -> REJECTED: Missing essential data")
             print()
             continue
@@ -554,7 +559,8 @@ def update_markets_csv():
         # Add to market_data
         market_data.append({
             "market_name": question,
-            "token_id": token_id,
+            "token_id_yes": token_id_yes,
+            "token_id_no": token_id_no,
             "date_time": parsed_date,
             "market_slug": slug,
             "condition_id": condition_id
@@ -571,7 +577,7 @@ def update_markets_csv():
 
     try:
         with open(MARKETS_CSV_FILE, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=["market_name", "token_id", "date_time", "market_slug", "condition_id"])
+            writer = csv.DictWriter(f, fieldnames=["market_name", "token_id_yes", "token_id_no", "date_time", "market_slug", "condition_id"])
             writer.writeheader()
             writer.writerows(market_data)
         print(f"Found {xrp_market_count} XRP hourly markets")
@@ -580,10 +586,10 @@ def update_markets_csv():
         print(f"Error writing to file {MARKETS_CSV_FILE}: {e}")
 
 
-def get_current_market_token_id():
-    """Find the token ID for the XRP market that corresponds to the current date/time"""
+def get_current_market_token_ids():
+    """Find the token IDs for the Ripple market that corresponds to the current date/time"""
     current_hour_utc = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
-    return get_market_token_id_for_hour(current_hour_utc)
+    return get_market_token_ids_for_hour(current_hour_utc)
 
 def get_order_book(token_id):
     """
@@ -683,16 +689,16 @@ def collect_data_once():
             p_up_prediction = calculate_live_prediction(historical_df, t0, ofi, p_start, xrp_price)
         # --- End Prediction Logic ---
 
-        token_id, market_name = get_current_market_token_id()
+        token_id_yes, token_id_no, market_name = get_current_market_token_ids()
 
         t1 = datetime.now(UTC)
-        print(f"({t1.strftime('%H:%M:%S.%f')}) Found token ID. Elapsed: {(t1-t0).total_seconds():.4f}s")
+        print(f"({t1.strftime('%H:%M:%S.%f')}) Found token IDs. Elapsed: {(t1-t0).total_seconds():.4f}s")
 
-        if not token_id:
+        if not token_id_yes:
             print(f"({datetime.now(UTC).strftime('%H:%M:%S.%f')}) No active market found for the current hour.")
             return
 
-        best_bid, best_ask = get_order_book(token_id)
+        best_bid, best_ask = get_order_book(token_id_yes)
 
         t2 = datetime.now(UTC)
         print(f"({t2.strftime('%H:%M:%S.%f')}) Got order book. API call took: {(t2-t1).total_seconds():.4f}s")
@@ -705,9 +711,9 @@ def collect_data_once():
                 'timestamp': t0.strftime('%Y-%m-%d %H:%M:%S'),
                 'market_name': market_name,
                 'xrp_usdt_spot': xrp_price,
-                'ofi': ofi,
-                'p_up_prediction': p_up_prediction,
-                'token_id': token_id,
+                'ofi_xrp': ofi,
+                'p_up_prediction_xrp': p_up_prediction,
+                'token_id': token_id_yes, # Log the YES token ID for consistency
                 'best_bid': best_bid_price,
                 'best_ask': best_ask_price
             }
