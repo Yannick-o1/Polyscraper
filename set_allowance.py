@@ -39,24 +39,28 @@ def set_unlimited_allowance():
 
     # --- Set Allowance ---
     print("\nSetting unlimited USDC allowance for the Polymarket exchange.")
-    print("This will require a transaction on the Polygon network and may take a moment...")
+    print("This will require a transaction on the Polygon network if not already set.")
+    print("Please wait...")
 
     try:
-        # This function sends a transaction to the blockchain to approve spending
-        response = client.set_usdc_allowance(MAX_UINT_256)
-        tx_hash = response.get('transaction_hash')
+        # This function checks the current allowance and sends a transaction
+        # to the blockchain to approve spending if the allowance is insufficient.
+        response = client.update_balance_allowance()
         
-        if not tx_hash:
-            print(f"Error: Allowance transaction failed. Response: {response}", file=sys.stderr)
+        # This function may not return a transaction hash if the allowance is already sufficient.
+        # We check the response to see what happened.
+        if "transaction_hash" in response:
+            tx_hash = response.get('transaction_hash')
+            print(f"Allowance transaction sent successfully! Hash: {tx_hash}")
+            print("Waiting for transaction to be mined...")
+            client.wait_for_transaction(tx_hash, timeout=300)
+            print("\n✅ Success! New allowance has been set.")
+        elif response.get("allowance") == str(MAX_UINT_256) and response.get("balance") is not None:
+             print("\n✅ Success! Your USDC allowance is already set to the maximum.")
+        else:
+            print(f"An unexpected response was received: {response}", file=sys.stderr)
             sys.exit(1)
-            
-        print(f"Allowance transaction sent successfully! Hash: {tx_hash}")
-        print("Waiting for transaction to be mined...")
 
-        # Wait for the transaction to complete
-        client.wait_for_transaction(tx_hash, timeout=300)
-        
-        print("\n✅ Success! Allowance has been set.")
         print("Your scrapers should now be able to place trades successfully.")
 
     except Exception as e:
