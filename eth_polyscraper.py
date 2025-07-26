@@ -804,7 +804,7 @@ def get_user_state(token_id_yes, token_id_no):
     if not polymarket_client:
         return None, None, None
     try:
-        account_info = polymarket_client.get_account_data()
+        account_info = polymarket_client.get_user_account()
         usdc_balance = float(account_info["usdc_balance"])
         
         positions = polymarket_client.get_user_positions()
