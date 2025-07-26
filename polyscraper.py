@@ -889,74 +889,29 @@ def get_all_trades_for_token(token_id):
 
 def get_user_state(token_id_yes, token_id_no):
     """Fetches user's USDC balance and positions in the given market."""
-    if not polymarket_client or not POLYMARKET_PROXY_ADDRESS:
+    if not polymarket_client:
         return None, None, None
     try:
-        # 1. Fetch USDC Balance (this part is confirmed working)
-        balance_params = BalanceAllowanceParams(
+        # 1. Fetch USDC Balance
+        usdc_balance_params = BalanceAllowanceParams(
             asset_type=AssetType.COLLATERAL, signature_type=-1
         )
-        account_info = polymarket_client.get_balance_allowance(balance_params)
-        usdc_balance = float(account_info["balance"]) / 1_000_000.0
+        usdc_account_info = polymarket_client.get_balance_allowance(usdc_balance_params)
+        usdc_balance = float(usdc_account_info["balance"]) / 1_000_000.0
 
-        # 2. Calculate Net Position from Trade History
-        user_address = POLYMARKET_PROXY_ADDRESS.lower()
-        
-        # --- YES Token Position ---
-        position_yes = 0.0
-        trades_yes = get_all_trades_for_token(token_id_yes)
-        
-        # --- TEMPORARY DEBUGGING ---
-        print("--- RAW YES TRADES ---")
-        print(trades_yes)
-        print("--- END RAW YES TRADES ---")
+        # 2. Fetch YES Token Balance
+        yes_balance_params = BalanceAllowanceParams(
+            asset_type=AssetType.CONDITIONAL, token_id=token_id_yes, signature_type=-1
+        )
+        yes_account_info = polymarket_client.get_balance_allowance(yes_balance_params)
+        position_yes = float(yes_account_info["balance"])
 
-        if trades_yes is None: # Defensive check in case the API returns None
-            trades_yes = []
-        for trade in trades_yes:
-            size = float(trade.get("size", 0.0))
-            maker_address = trade.get("maker_address", "").lower()
-            taker_address = trade.get("taker_address", "").lower()
-
-            if taker_address == user_address:
-                # If we were the TAKER: our position changes according to the side.
-                if trade.get("side") == "buy":
-                    position_yes += size
-                else: # sell
-                    position_yes -= size
-            elif maker_address == user_address:
-                # If we were the MAKER: our position changes according to the side of our original resting order.
-                if trade.get("side") == "buy": # A taker bought from our sell order
-                    position_yes -= size
-                else: # sell, a taker sold to our buy order
-                    position_yes += size
-        
-        # --- NO Token Position ---
-        position_no = 0.0
-        trades_no = get_all_trades_for_token(token_id_no)
-
-        # --- TEMPORARY DEBUGGING ---
-        print("--- RAW NO TRADES ---")
-        print(trades_no)
-        print("--- END RAW NO TRADES ---")
-
-        if trades_no is None: # Defensive check in case the API returns None
-            trades_no = []
-        for trade in trades_no:
-            size = float(trade.get("size", 0.0))
-            maker_address = trade.get("maker_address", "").lower()
-            taker_address = trade.get("taker_address", "").lower()
-
-            if taker_address == user_address:
-                if trade.get("side") == "buy":
-                    position_no += size
-                else: # sell
-                    position_no -= size
-            elif maker_address == user_address:
-                if trade.get("side") == "buy": # A taker bought from our sell order
-                    position_no -= size
-                else: # sell, a taker sold to our buy order
-                    position_no += size
+        # 3. Fetch NO Token Balance
+        no_balance_params = BalanceAllowanceParams(
+            asset_type=AssetType.CONDITIONAL, token_id=token_id_no, signature_type=-1
+        )
+        no_account_info = polymarket_client.get_balance_allowance(no_balance_params)
+        position_no = float(no_account_info["balance"])
 
         return usdc_balance, position_yes, position_no
     except Exception as e:
