@@ -823,11 +823,11 @@ def get_user_state(token_id_yes, token_id_no):
         position_no = 0.0
 
         for p in orders:
-            if p["token_id"] == token_id_yes:
-                # Assuming 'size' is the key for the number of shares
-                position_yes += float(p["size"])
-            elif p["token_id"] == token_id_no:
-                position_no += float(p["size"])
+            # The order object uses 'asset_id' for the token and 'order_size' for the quantity
+            if p.get("asset_id") == token_id_yes:
+                position_yes += float(p.get("order_size", 0.0))
+            elif p.get("asset_id") == token_id_no:
+                position_no += float(p.get("order_size", 0.0))
 
         return usdc_balance, position_yes, position_no
     except Exception as e:
