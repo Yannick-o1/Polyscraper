@@ -1,7 +1,11 @@
 import os
 import sys
 from py_clob_client.client import ClobClient
-from py_clob_client.constants import MAX_UINT_256
+
+# The constant MAX_UINT_256 might not be in all versions of the library.
+# We define it manually here. It's the standard value for an "unlimited" allowance.
+MAX_UINT_256 = 2**256 - 1
+
 
 def set_unlimited_allowance():
     """
