@@ -29,7 +29,7 @@ except ImportError:
 # --- Globals ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CLOB_API_URL = "https://clob.polymarket.com"
-DATA_API_URL = "https://gamma-api.polymarket.com"  # Correct, verified Data API URL
+DATA_API_URL = "https://api.polymarket.com"  # Correct, verified V2 Data API URL
 MARKETS_CSV_FILE = os.path.join(BASE_DIR, "btc_polymarkets.csv")
 DB_FILE = os.path.join(BASE_DIR, "polyscraper.db")
 MODEL_FILE = os.path.join(BASE_DIR, "btc_lgbm.txt")
@@ -814,8 +814,8 @@ def get_positions_from_data_api():
         print("Cannot fetch from Data API without POLYMARKET_PROXY_ADDRESS.")
         return None
     try:
-        # NOTE: The get_user_positions endpoint is on the /v1 path
-        url = f"{DATA_API_URL}/v1/get_user_positions"
+        # Correct V2 endpoint path
+        url = f"{DATA_API_URL}/v2/user/positions"
         params = {"user": POLYMARKET_PROXY_ADDRESS}
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
