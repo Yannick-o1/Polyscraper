@@ -28,6 +28,7 @@ DB_FILE = os.path.join(BASE_DIR, "eth_polyscraper.db")
 MODEL_FILE = os.path.join(BASE_DIR, "eth_lgbm.txt")
 
 # --- Polymarket Configuration ---
+TRADING_ENABLED = False  # SET TO True TO ENABLE LIVE TRADING
 # Set these environment variables or modify directly:
 POLYMARKET_PRIVATE_KEY = os.getenv("POLYMARKET_PRIVATE_KEY", "")  # Your private key
 POLYMARKET_PROXY_ADDRESS = os.getenv("POLYMARKET_PROXY_ADDRESS", "")  # Your proxy wallet address
@@ -771,31 +772,34 @@ def collect_data_once():
             conn.close()
 
             # --- Order Placement Logic ---
-            if p_up_prediction is not None and best_bid_price is not None and best_ask_price is not None:
-                midpoint = (best_bid_price + best_ask_price) / 2
-                # Calculate delta in percentage points
-                delta = (p_up_prediction - midpoint) * 100
-                abs_delta = abs(delta)
+            if TRADING_ENABLED:
+                if p_up_prediction is not None and best_bid_price is not None and best_ask_price is not None:
+                    midpoint = (best_bid_price + best_ask_price) / 2
+                    # Calculate delta in percentage points
+                    delta = (p_up_prediction - midpoint) * 100
+                    abs_delta = abs(delta)
 
-                print(f"Delta calculation: prediction={p_up_prediction:.4f}, midpoint={midpoint:.4f}, delta={delta:.2f}")
+                    print(f"Delta calculation: prediction={p_up_prediction:.4f}, midpoint={midpoint:.4f}, delta={delta:.2f}")
 
-                if abs_delta > PROBABILITY_DELTA_THRESHOLD:
-                    # Place the order at the current market midpoint
-                    order_price = round(midpoint, 2)
-                    
-                    # Determine direction based on the delta
-                    direction = "UP" if delta > 0 else "DOWN"
-                    
-                    print(f"🚨 Delta threshold exceeded! |{delta:.2f}| > {PROBABILITY_DELTA_THRESHOLD}")
-                    print(f"Attempting to place {direction} order...")
-                    
-                    success = place_polymarket_order(direction, token_id_yes, token_id_no, order_price, ORDER_SIZE_USD)
-                    if success:
-                        print(f"✅ Order placement successful for ETH")
+                    if abs_delta > PROBABILITY_DELTA_THRESHOLD:
+                        # Place the order at the current market midpoint
+                        order_price = round(midpoint, 2)
+
+                        # Determine direction based on the delta
+                        direction = "UP" if delta > 0 else "DOWN"
+
+                        print(f"🚨 Delta threshold exceeded! |{delta:.2f}| > {PROBABILITY_DELTA_THRESHOLD}")
+                        print(f"Attempting to place {direction} order...")
+
+                        success = place_polymarket_order(direction, token_id_yes, token_id_no, order_price, ORDER_SIZE_USD)
+                        if success:
+                            print(f"✅ Order placement successful for ETH")
+                        else:
+                            print(f"❌ Order placement failed for ETH")
                     else:
-                        print(f"❌ Order placement failed for ETH")
-                else:
-                    print(f"Delta {delta:.2f} below threshold {PROBABILITY_DELTA_THRESHOLD}, no order placed")
+                        print(f"Delta {delta:.2f} below threshold {PROBABILITY_DELTA_THRESHOLD}, no order placed")
+            else:
+                print("Trading is disabled.")
             # --- End Order Placement Logic ---
 
             t3 = datetime.now(UTC)
