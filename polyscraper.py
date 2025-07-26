@@ -940,7 +940,7 @@ def manage_positions(delta, token_id_yes, token_id_no, price_yes, price_no):
     - Sells positions if delta is in the dead zone.
     - Adjusts UP/DOWN positions based on delta magnitude and sign.
     """
-    print("\n--- Position Management ---")
+    print("\n--- Position Management (BTC) ---")
     if not polymarket_client:
         print("-> Trading disabled, skipping position management.")
         return
@@ -953,14 +953,19 @@ def manage_positions(delta, token_id_yes, token_id_no, price_yes, price_no):
 
     print(f"-> State: YES shares={position_yes:.4f}, NO shares={position_no:.4f}, USDC=${usdc_balance:.2f}")
     
-    # Value of current holdings
-    value_yes = calculate_position_value(token_id_yes, position_yes)
-    value_no = calculate_position_value(token_id_no, position_no)
+    # Value of current holdings for bankroll calculation (liquidatable value at bid)
+    value_yes_liquidatable = calculate_position_value(token_id_yes, position_yes)
+    value_no_liquidatable = calculate_position_value(token_id_no, position_no)
     
-    print(f"-> Value: YES=${value_yes:.2f}, NO=${value_no:.2f}")
+    # Value of current holdings at midpoint price for trading calculations
+    value_yes_midpoint = position_yes * price_yes
+    value_no_midpoint = position_no * price_no
+    
+    print(f"-> Value (Liquidatable): YES=${value_yes_liquidatable:.2f}, NO=${value_no_liquidatable:.2f}")
+    print(f"-> Value (Midpoint):    YES=${value_yes_midpoint:.2f}, NO=${value_no_midpoint:.2f}")
 
-    # Dynamically calculate total bankroll
-    total_bankroll = usdc_balance + value_yes + value_no
+    # Dynamically calculate total bankroll using conservative liquidatable value
+    total_bankroll = usdc_balance + value_yes_liquidatable + value_no_liquidatable
     print(f"-> Total Bankroll (USDC + Positions) = ${total_bankroll:.2f}")
 
     # --- Target Calculation ---
@@ -978,19 +983,19 @@ def manage_positions(delta, token_id_yes, token_id_no, price_yes, price_no):
 
     # --- Position Adjustment ---
     print("-> Adjusting Positions...")
-    # 1. Close unwanted positions first
-    if target_direction != "UP" and position_yes > 0:
-        print(f"-> Action: Target is not UP. Closing YES position of {position_yes:.4f} shares (value ${value_yes:.2f}).")
-        place_order(SELL, token_id_yes, price_yes, value_yes)
+    # 1. Close unwanted positions first. To sell the entire position, the order value must be shares * sell_price.
+    if target_direction != "UP" and position_yes > 0.1: # Use a small threshold to avoid dust
+        print(f"-> Action: Target is not UP. Closing YES position of {position_yes:.4f} shares.")
+        place_order(SELL, token_id_yes, price_yes, value_yes_midpoint)
     
-    if target_direction != "DOWN" and position_no > 0:
-        print(f"-> Action: Target is not DOWN. Closing NO position of {position_no:.4f} shares (value ${value_no:.2f}).")
-        place_order(SELL, token_id_no, price_no, value_no)
+    if target_direction != "DOWN" and position_no > 0.1: # Use a small threshold
+        print(f"-> Action: Target is not DOWN. Closing NO position of {position_no:.4f} shares.")
+        place_order(SELL, token_id_no, price_no, value_no_midpoint)
 
-    # 2. Adjust target position
+    # 2. Adjust target position. The adjustment must be against the position's value at the trading price (midpoint).
     if target_direction == "UP":
-        adjustment_usd = target_value - value_yes
-        print(f"-> UP Adjustment: Target=${target_value:.2f}, Current=${value_yes:.2f}, Diff=${adjustment_usd:.2f}")
+        adjustment_usd = target_value - value_yes_midpoint
+        print(f"-> UP Adjustment: Target=${target_value:.2f}, Current=${value_yes_midpoint:.2f}, Diff=${adjustment_usd:.2f}")
         if adjustment_usd > 0.1: # Threshold to avoid tiny orders
             print(f"-> Action: BUY ${adjustment_usd:.2f} of YES token.")
             place_order(BUY, token_id_yes, price_yes, adjustment_usd)
@@ -1001,8 +1006,8 @@ def manage_positions(delta, token_id_yes, token_id_no, price_yes, price_no):
             print("-> Action: No significant adjustment needed for UP position.")
 
     elif target_direction == "DOWN":
-        adjustment_usd = target_value - value_no
-        print(f"-> DOWN Adjustment: Target=${target_value:.2f}, Current=${value_no:.2f}, Diff=${adjustment_usd:.2f}")
+        adjustment_usd = target_value - value_no_midpoint
+        print(f"-> DOWN Adjustment: Target=${target_value:.2f}, Current=${value_no_midpoint:.2f}, Diff=${adjustment_usd:.2f}")
         if adjustment_usd > 0.1: # Threshold to avoid tiny orders
             print(f"-> Action: BUY ${adjustment_usd:.2f} of NO token.")
             place_order(BUY, token_id_no, price_no, adjustment_usd)
@@ -1011,8 +1016,8 @@ def manage_positions(delta, token_id_yes, token_id_no, price_yes, price_no):
             place_order(SELL, token_id_no, price_no, abs(adjustment_usd))
         else:
             print("-> Action: No significant adjustment needed for DOWN position.")
-    
-    print("--- End Position Management ---")
+            
+    print("--- End Position Management (BTC) ---")
 
 if __name__ == "__main__":
     import argparse
