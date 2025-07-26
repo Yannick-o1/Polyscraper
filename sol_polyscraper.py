@@ -315,7 +315,7 @@ def calculate_live_prediction(historical_df, current_timestamp, current_ofi, p_s
         df['lret'] = np.log(df['sol_usdt_spot']).diff()
         
         # Use a rolling window of 20 periods (minutes) for std deviation
-        rolling_vol = df['lret'].rolling(window=20, min_periods=2).std()
+        rolling_vol = df['lret'].rolling(window=20, min_periods=20).std()
         
         # Get the most recent volatility value and scale it to the hour
         vol = rolling_vol.iloc[-1] * np.sqrt(60) if not rolling_vol.empty else 0.0
