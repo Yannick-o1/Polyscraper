@@ -706,6 +706,114 @@ def get_order_book(token_id):
         print(f"Error fetching order data for token {token_id}: {e}")
         return None, None
 
+def collect_data_once():
+    """Collect data for one minute and log it to the SQLite database."""
+    # Ensure the database and tables exist before any other operation
+    init_database()
+    
+    try:
+        t0 = datetime.now(UTC)
+        print(f"({t0.strftime('%H:%M:%S.%f')}) --- Starting run ---")
+        
+        # Fetch the SOL spot price and OFI from Binance first
+        sol_price, ofi = get_binance_data_and_ofi()
+        
+        # --- Prediction Logic ---
+        p_up_prediction = None
+        if model is not None and sol_price is not None:
+            # Determine the start of the current hour
+            current_hour_start_utc = t0.replace(minute=0, second=0, microsecond=0)
+            
+            # Get p_start from cache or Binance Klines
+            p_start = get_p_start_from_binance(current_hour_start_utc)
+
+            # Fetch last 30 mins of data for volatility calculation
+            conn = sqlite3.connect(DB_FILE)
+            thirty_mins_ago = (t0 - timedelta(minutes=30)).strftime('%Y-%m-%d %H:%M:%S')
+            historical_df = pd.read_sql_query(
+                f"SELECT timestamp, sol_usdt_spot FROM polydata WHERE timestamp >= '{thirty_mins_ago}'", conn)
+            conn.close()
+            
+            # Append current price to historical data to get the most up-to-date volatility
+            if not historical_df.empty:
+                current_data_df = pd.DataFrame([{'timestamp': t0.strftime('%Y-%m-%d %H:%M:%S'), 'sol_usdt_spot': sol_price}])
+                historical_df = pd.concat([historical_df, current_data_df], ignore_index=True)
+            
+            p_up_prediction = calculate_live_prediction(historical_df, t0, ofi, p_start, sol_price)
+        # --- End Prediction Logic ---
+
+        token_id_yes, token_id_no, market_name = get_current_market_token_ids()
+
+        t1 = datetime.now(UTC)
+        print(f"({t1.strftime('%H:%M:%S.%f')}) Found token IDs. Elapsed: {(t1-t0).total_seconds():.4f}s")
+
+        if not token_id_yes:
+            print(f"({datetime.now(UTC).strftime('%H:%M:%S.%f')}) No active market found for the current hour.")
+            return
+
+        best_bid, best_ask = get_order_book(token_id_yes)
+
+        t2 = datetime.now(UTC)
+        print(f"({t2.strftime('%H:%M:%S.%f')}) Got order book. API call took: {(t2-t1).total_seconds():.4f}s")
+
+        if best_bid and best_ask:
+            best_bid_price = best_bid[0]
+            best_ask_price = best_ask[0]
+
+            data_row = {
+                'timestamp': t0.strftime('%Y-%m-%d %H:%M:%S'),
+                'market_name': market_name,
+                'sol_usdt_spot': sol_price,
+                'ofi': ofi,
+                'p_up_prediction': p_up_prediction,
+                'token_id': token_id_yes, # Log the YES token ID for consistency
+                'best_bid': best_bid_price,
+                'best_ask': best_ask_price
+            }
+
+            # Ensure the database and table exist, then insert the new row
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO polydata (timestamp, market_name, token_id, best_bid, best_ask, sol_usdt_spot, ofi, p_up_prediction)
+                VALUES (:timestamp, :market_name, :token_id, :best_bid, :best_ask, :sol_usdt_spot, :ofi, :p_up_prediction)
+            ''', data_row)
+            conn.commit()
+            conn.close()
+
+            # --- Order Placement Logic ---
+            if TRADING_ENABLED:
+                if p_up_prediction is not None and best_bid_price is not None and best_ask_price is not None:
+                    # Midpoint price of the YES token is our best estimate of the current market probability
+                    price_yes = (best_bid_price + best_ask_price) / 2
+                    
+                    # Price of the NO token is inverse of the YES token
+                    price_no = 1 - price_yes
+                    
+                    # Calculate delta in percentage points
+                    delta = (p_up_prediction - price_yes) * 100
+                    
+                    print(f"Prediction={p_up_prediction:.4f}, Market Price={price_yes:.4f}, Delta={delta:.2f}% for SOL")
+                    
+                    # Manage positions based on the calculated delta
+                    manage_positions(delta, token_id_yes, token_id_no, price_yes, price_no)
+            else:
+                print("Trading is disabled for SOL.")
+            # --- End Order Placement Logic ---
+
+            t3 = datetime.now(UTC)
+            sol_price_str = f"{sol_price:.2f}" if sol_price is not None else "N/A"
+            ofi_str = f"{ofi:.4f}" if ofi is not None else "N/A"
+            prediction_str = f"{p_up_prediction:.4f}" if p_up_prediction is not None else "N/A"
+            print(f"({t3.strftime('%H:%M:%S.%f')}) Logged to DB: SOL={sol_price_str}, OFI={ofi_str}, P(Up)={prediction_str}, Bid={best_bid_price:.2f}, Ask={best_ask_price:.2f} for '{market_name}'")
+            print(f"({t3.strftime('%H:%M:%S.%f')}) --- Total run time: {(t3-t0).total_seconds():.4f}s ---")
+
+        else:
+            print(f"({datetime.now(UTC).strftime('%H:%M:%S.%f')}) Could not retrieve valid order book for '{market_name}'")
+
+    except Exception as e:
+        print(f"An unexpected error occurred during data collection for SOL: {e}")
+
 def get_all_trades_for_token(token_id):
     """Fetches all pages of trades for a given token ID."""
     try:
