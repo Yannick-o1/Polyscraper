@@ -135,7 +135,7 @@ def get_p_start_from_binance(hour_start_utc):
     Fetches the opening price for a specific hour from Binance 1-minute kline data.
     Uses a database cache to avoid redundant API calls.
     """
-    hour_key = hour_start_utc.strftime('%Y-%m-%d %H')
+    hour_key = f"{ASSET_SYMBOL}_{hour_start_utc.strftime('%Y-%m-%d %H')}"
     conn = None
     try:
         conn = sqlite3.connect(DB_FILE)
@@ -153,7 +153,7 @@ def get_p_start_from_binance(hour_start_utc):
 
         # 3. Check for previous hour's price in cache to resolve outcome
         previous_hour_utc = hour_start_utc - timedelta(hours=1)
-        previous_hour_key = previous_hour_utc.strftime('%Y-%m-%d %H')
+        previous_hour_key = f"{ASSET_SYMBOL}_{previous_hour_utc.strftime('%Y-%m-%d %H')}"
         cursor.execute("SELECT p_start_price FROM p_start_cache WHERE hour_key = ?", (previous_hour_key,))
         prev_result = cursor.fetchone()
 
@@ -229,7 +229,7 @@ def update_outcome_in_db(previous_hour_utc, outcome, p_start_previous, p_start_c
 
         cursor.execute("""
             UPDATE polydata 
-            SET outcome = ? 
+            SET outcome_eth = ? 
             WHERE timestamp >= ? AND timestamp < ?
         """, (outcome, hour_start_str, hour_end_str))
         
@@ -330,7 +330,7 @@ def calculate_live_prediction(historical_df, current_timestamp, current_ofi, p_s
             return None
             
         X_live = [[r_scaled, tau, vol, ofi]]
-        p_up = model.predict(X_live)[0]
+        p_up = float(model.predict(X_live)[0])
         
         return p_up
         
