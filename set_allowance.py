@@ -32,7 +32,8 @@ def set_unlimited_allowance():
             signature_type=1,
             funder=proxy_address
         )
-        print("Polymarket client initialized.")
+        client.set_api_creds(client.create_or_derive_api_creds())
+        print("Polymarket client initialized and API credentials set.")
     except Exception as e:
         print(f"Error initializing client: {e}", file=sys.stderr)
         sys.exit(1)

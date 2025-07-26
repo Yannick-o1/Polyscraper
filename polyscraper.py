@@ -64,15 +64,18 @@ except Exception as e:
     print("Predictions will be disabled.")
     model = None
 
-def place_polymarket_order(token_id, direction, price, size_usd=ORDER_SIZE_USD):
+def place_polymarket_order(direction, token_id_yes, token_id_no, price, size_usd=ORDER_SIZE_USD):
     """
-    Place an order on Polymarket.
+    Places an order on Polymarket by buying the correct token.
+    - "UP" bets buy the "YES" token.
+    - "DOWN" bets buy the "NO" token.
     
     Args:
-        token_id (str): The token ID for the market
-        direction (str): "UP" for buy, "DOWN" for sell
-        price (float): Order price (0-1 range)
-        size_usd (float): Order size in USD
+        direction (str): "UP" or "DOWN"
+        token_id_yes (str): The token ID for the "YES" outcome.
+        token_id_no (str): The token ID for the "NO" outcome.
+        price (float): The current market price for the "YES" token (0-1 range).
+        size_usd (float): Order size in USD.
     
     Returns:
         bool: True if order placed successfully, False otherwise
@@ -82,24 +85,36 @@ def place_polymarket_order(token_id, direction, price, size_usd=ORDER_SIZE_USD):
         return False
     
     try:
-        # Convert direction to side
-        side = BUY if direction == "UP" else SELL
-        
+        if direction == "UP":
+            side = BUY
+            order_token_id = token_id_yes
+            order_price = price
+            print(f"Submitting UP bet: BUYING YES token at ${order_price:.2f}")
+        elif direction == "DOWN":
+            side = BUY
+            order_token_id = token_id_no
+            # The price of the NO token is always 1 - price of YES token
+            order_price = 1 - price
+            print(f"Submitting DOWN bet: BUYING NO token at ${order_price:.2f}")
+        else:
+            print(f"Invalid order direction: {direction}")
+            return False
+
         # Calculate order size in shares
-        size_shares = size_usd / price if price > 0 else 0
+        size_shares = size_usd / order_price if order_price > 0 else 0
         
         if size_shares <= 0:
-            print(f"Invalid order size: {size_shares}")
+            print(f"Invalid order size or price: size={size_shares}, price={order_price}")
             return False
         
         # Create order with a 2-minute expiration to avoid threshold issues
         expiration = int((datetime.now(UTC) + timedelta(minutes=2)).timestamp())
         
         order_args = OrderArgs(
-            price=price,
+            price=round(order_price, 2), # Round price to 2 decimal places
             size=size_shares,
             side=side,
-            token_id=token_id,
+            token_id=order_token_id,
             expiration=expiration
         )
         
@@ -109,7 +124,7 @@ def place_polymarket_order(token_id, direction, price, size_usd=ORDER_SIZE_USD):
         response = polymarket_client.post_order(signed_order, OrderType.GTD)
         
         if response.get('success', False):
-            print(f"✅ Order placed successfully: {direction} {size_shares:.2f} shares at ${price:.2f} (${size_usd} total)")
+            print(f"✅ Order placed successfully: {direction} {size_shares:.2f} shares at ${order_price:.2f} (${size_usd} total)")
             return True
         else:
             print(f"❌ Order failed: {response.get('errorMsg', 'Unknown error')}")
@@ -402,6 +417,44 @@ def get_market_token_id_for_hour(target_hour_dt_utc, auto_update=True):
         print(f"Error reading or processing CSV for token ID lookup: {e}")
         return None, None
 
+def get_market_token_ids_for_hour(target_hour_dt_utc, auto_update=True):
+    """Find the token IDs for the market corresponding to a specific hour."""
+    try:
+        markets_df = pd.read_csv(MARKETS_CSV_FILE)
+        et_tz = ZoneInfo("America/New_York")
+        # Convert the target UTC datetime to America/New_York timezone for lookup
+        target_hour_dt_et = target_hour_dt_utc.astimezone(et_tz)
+        target_datetime_str = target_hour_dt_et.strftime('%Y-%m-%d %H:%M EDT')
+        
+        matching_rows = markets_df[markets_df['date_time'] == target_datetime_str]
+        
+        if matching_rows.empty:
+            if auto_update:
+                print(f"No market found for {target_datetime_str}. Auto-updating markets...")
+                update_markets_csv()
+                # Retry once after updating markets
+                return get_market_token_ids_for_hour(target_hour_dt_utc, auto_update=False)
+            return None, None, None
+        
+        market_row = matching_rows.iloc[0]
+        token_id_yes = str(int(market_row['token_id_yes']))
+        token_id_no = str(int(market_row['token_id_no']))
+        market_name = market_row['market_name']
+        
+        return token_id_yes, token_id_no, market_name
+        
+    except FileNotFoundError:
+        if auto_update:
+            print(f"Error: '{MARKETS_CSV_FILE}' not found. Auto-updating markets...")
+            update_markets_csv()
+            # Retry once after updating markets
+            return get_market_token_ids_for_hour(target_hour_dt_utc, auto_update=False)
+        print(f"Error: '{MARKETS_CSV_FILE}' not found.")
+        return None, None, None
+    except Exception as e:
+        print(f"Error reading or processing CSV for token ID lookup: {e}")
+        return None, None, None
+
 def parse_market_datetime(market_slug, market_question):
     """
     Extracts the market's date and time from its slug or question.
@@ -501,24 +554,29 @@ def update_markets_csv():
         bitcoin_market_count += 1
         slug = m.get("market_slug")
         question = m.get("question")
-        condition_id = m.get("condition_id") # We need this for outcome checking
+        condition_id = m.get("condition_id")
         
-        # Get the first token (assuming there are typically 2 tokens for yes/no)
-        if m.get("tokens") and len(m["tokens"]) > 0:
-            token_id = m["tokens"][0].get("token_id")
+        # Find the YES (Up) and NO (Down) tokens
+        token_id_yes = None
+        token_id_no = None
+        if m.get("tokens") and len(m["tokens"]) == 2:
+            # Polymarket's first token (index 0) is typically the "YES" outcome
+            token_id_yes = m["tokens"][0].get("token_id")
+            token_id_no = m["tokens"][1].get("token_id")
         else:
-            token_id = None
-        
+            token_id_yes, token_id_no = None, None
+
         # Parse the date from the market
         parsed_date = parse_market_datetime(slug, question)
         
         print(f"Found market {bitcoin_market_count}: {slug}")
         print(f"  Question: {question}")
-        print(f"  Token ID: {token_id}")
+        print(f"  Token YES ID: {token_id_yes}")
+        print(f"  Token NO ID: {token_id_no}")
         print(f"  Parsed Date: {parsed_date}")
         
         # Reject markets with missing essential data
-        if not slug or not question or not token_id or parsed_date == "Could not parse date":
+        if not all([slug, question, token_id_yes, token_id_no, parsed_date != "Could not parse date"]):
             print(f"  -> REJECTED: Missing essential data")
             print()
             continue
@@ -543,7 +601,8 @@ def update_markets_csv():
         # Add to market_data
         market_data.append({
             "market_name": question,
-            "token_id": token_id,
+            "token_id_yes": token_id_yes,
+            "token_id_no": token_id_no,
             "date_time": parsed_date,
             "market_slug": slug,
             "condition_id": condition_id
@@ -560,7 +619,7 @@ def update_markets_csv():
 
     try:
         with open(MARKETS_CSV_FILE, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=["market_name", "token_id", "date_time", "market_slug", "condition_id"])
+            writer = csv.DictWriter(f, fieldnames=["market_name", "token_id_yes", "token_id_no", "date_time", "market_slug", "condition_id"])
             writer.writeheader()
             writer.writerows(market_data)
         print(f"Found {bitcoin_market_count} Bitcoin hourly markets")
@@ -569,10 +628,10 @@ def update_markets_csv():
         print(f"Error writing to file {MARKETS_CSV_FILE}: {e}")
 
 
-def get_current_market_token_id():
-    """Find the token ID for the Bitcoin market that corresponds to the current date/time"""
+def get_current_market_token_ids():
+    """Find the token IDs for the Bitcoin market that corresponds to the current date/time"""
     current_hour_utc = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
-    return get_market_token_id_for_hour(current_hour_utc)
+    return get_market_token_ids_for_hour(current_hour_utc)
 
 def get_order_book(token_id):
     """
@@ -672,16 +731,16 @@ def collect_data_once():
             p_up_prediction = calculate_live_prediction(historical_df, t0, ofi, p_start, btc_price)
         # --- End Prediction Logic ---
 
-        token_id, market_name = get_current_market_token_id()
+        token_id_yes, token_id_no, market_name = get_current_market_token_ids()
 
         t1 = datetime.now(UTC)
-        print(f"({t1.strftime('%H:%M:%S.%f')}) Found token ID. Elapsed: {(t1-t0).total_seconds():.4f}s")
+        print(f"({t1.strftime('%H:%M:%S.%f')}) Found token IDs. Elapsed: {(t1-t0).total_seconds():.4f}s")
 
-        if not token_id:
+        if not token_id_yes:
             print(f"({datetime.now(UTC).strftime('%H:%M:%S.%f')}) No active market found for the current hour.")
             return
 
-        best_bid, best_ask = get_order_book(token_id)
+        best_bid, best_ask = get_order_book(token_id_yes)
 
         t2 = datetime.now(UTC)
         print(f"({t2.strftime('%H:%M:%S.%f')}) Got order book. API call took: {(t2-t1).total_seconds():.4f}s")
@@ -696,7 +755,7 @@ def collect_data_once():
                 'btc_usdt_spot': btc_price,
                 'ofi': ofi,
                 'p_up_prediction': p_up_prediction,
-                'token_id': token_id,
+                'token_id': token_id_yes, # Log the YES token ID for consistency
                 'best_bid': best_bid_price,
                 'best_ask': best_ask_price
             }
@@ -728,9 +787,9 @@ def collect_data_once():
                     direction = "UP" if delta > 0 else "DOWN"
                     
                     print(f"🚨 Delta threshold exceeded! |{delta:.2f}| > {PROBABILITY_DELTA_THRESHOLD}")
-                    print(f"Attempting to place {direction} order at ${order_price:.2f}")
+                    print(f"Attempting to place {direction} order...")
                     
-                    success = place_polymarket_order(token_id, direction, order_price, ORDER_SIZE_USD)
+                    success = place_polymarket_order(direction, token_id_yes, token_id_no, order_price, ORDER_SIZE_USD)
                     if success:
                         print(f"✅ Order placement successful for BTC")
                     else:
