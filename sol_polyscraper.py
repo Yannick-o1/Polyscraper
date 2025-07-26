@@ -229,7 +229,7 @@ def update_outcome_in_db(previous_hour_utc, outcome, p_start_previous, p_start_c
 
         cursor.execute("""
             UPDATE polydata 
-            SET outcome_sol = ? 
+            SET outcome = ? 
             WHERE timestamp >= ? AND timestamp < ?
         """, (outcome, hour_start_str, hour_end_str))
         
@@ -290,7 +290,7 @@ def calculate_live_prediction(historical_df, current_timestamp, current_ofi, p_s
         df = df.sort_index()
         
         # Remove rows with missing prices
-        df = df.dropna(subset=['sol_usdt_spot'])
+        df = df.dropna(subset=['spot_price'])
         if len(df) < 2:
             return None
         
@@ -303,7 +303,7 @@ def calculate_live_prediction(historical_df, current_timestamp, current_ofi, p_s
             tau = 0.01
         
         # Calculate 20-minute rolling volatility on log returns
-        df['lret'] = np.log(df['sol_usdt_spot']).diff()
+        df['lret'] = np.log(df['spot_price']).diff()
         
         # Use a rolling window of 20 periods (minutes) for std deviation
         rolling_vol = df['lret'].rolling(window=20, min_periods=2).std()
@@ -361,17 +361,17 @@ def init_database():
         )
     ''')
     
-    # Check if the sol_usdt_spot column exists and add it if it doesn't
+    # Check if the columns exist and add them if they don't
     cursor.execute("PRAGMA table_info(polydata)")
     columns = [column[1] for column in cursor.fetchall()]
-    if 'sol_usdt_spot' not in columns:
-        cursor.execute("ALTER TABLE polydata ADD COLUMN sol_usdt_spot REAL")
-    if 'ofi_sol' not in columns:
-        cursor.execute("ALTER TABLE polydata ADD COLUMN ofi_sol REAL")
-    if 'p_up_prediction_sol' not in columns:
-        cursor.execute("ALTER TABLE polydata ADD COLUMN p_up_prediction_sol REAL")
-    if 'outcome_sol' not in columns:
-        cursor.execute("ALTER TABLE polydata ADD COLUMN outcome_sol TEXT")
+    if 'spot_price' not in columns:
+        cursor.execute("ALTER TABLE polydata ADD COLUMN spot_price REAL")
+    if 'ofi' not in columns:
+        cursor.execute("ALTER TABLE polydata ADD COLUMN ofi REAL")
+    if 'p_up_prediction' not in columns:
+        cursor.execute("ALTER TABLE polydata ADD COLUMN p_up_prediction REAL")
+    if 'outcome' not in columns:
+        cursor.execute("ALTER TABLE polydata ADD COLUMN outcome TEXT")
 
     conn.commit()
     conn.close()
@@ -716,12 +716,12 @@ def collect_data_once():
             conn = sqlite3.connect(DB_FILE)
             thirty_mins_ago = (t0 - timedelta(minutes=30)).strftime('%Y-%m-%d %H:%M:%S')
             historical_df = pd.read_sql_query(
-                f"SELECT timestamp, sol_usdt_spot FROM polydata WHERE timestamp >= '{thirty_mins_ago}'", conn)
+                f"SELECT timestamp, spot_price FROM polydata WHERE timestamp >= '{thirty_mins_ago}'", conn)
             conn.close()
             
             # Append current price to historical data to get the most up-to-date volatility
             if not historical_df.empty:
-                current_data_df = pd.DataFrame([{'timestamp': t0.strftime('%Y-%m-%d %H:%M:%S'), 'sol_usdt_spot': sol_price}])
+                current_data_df = pd.DataFrame([{'timestamp': t0.strftime('%Y-%m-%d %H:%M:%S'), 'spot_price': sol_price}])
                 historical_df = pd.concat([historical_df, current_data_df], ignore_index=True)
             
             p_up_prediction = calculate_live_prediction(historical_df, t0, ofi, p_start, sol_price)
@@ -748,9 +748,9 @@ def collect_data_once():
             data_row = {
                 'timestamp': t0.strftime('%Y-%m-%d %H:%M:%S'),
                 'market_name': market_name,
-                'sol_usdt_spot': sol_price,
-                'ofi_sol': ofi,
-                'p_up_prediction_sol': p_up_prediction,
+                'spot_price': sol_price,
+                'ofi': ofi,
+                'p_up_prediction': p_up_prediction,
                 'token_id': token_id_yes, # Log the YES token ID for consistency
                 'best_bid': best_bid_price,
                 'best_ask': best_ask_price
@@ -760,8 +760,8 @@ def collect_data_once():
             conn = sqlite3.connect(DB_FILE)
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO polydata (timestamp, market_name, token_id, best_bid, best_ask, sol_usdt_spot, ofi_sol, p_up_prediction_sol)
-                VALUES (:timestamp, :market_name, :token_id, :best_bid, :best_ask, :sol_usdt_spot, :ofi_sol, :p_up_prediction_sol)
+                INSERT INTO polydata (timestamp, market_name, token_id, best_bid, best_ask, spot_price, ofi, p_up_prediction)
+                VALUES (:timestamp, :market_name, :token_id, :best_bid, :best_ask, :spot_price, :ofi, :p_up_prediction)
             ''', data_row)
             conn.commit()
             conn.close()
