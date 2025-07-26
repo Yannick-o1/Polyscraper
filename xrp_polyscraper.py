@@ -225,7 +225,7 @@ def get_p_start_from_binance_api_call(hour_start_utc):
 def update_outcome_in_db(previous_hour_utc, outcome, p_start_previous, p_start_current):
     """Updates all rows for a given hour with the resolved outcome."""
     try:
-        _, market_name = get_market_token_id_for_hour(previous_hour_utc, auto_update=False)
+        _, _, market_name = get_market_token_ids_for_hour(previous_hour_utc, auto_update=False)
         print(f"Outcome for '{market_name}' was '{outcome}' (p_start={p_start_previous}, p_end={p_start_current}). Updating database...")
         
         conn = sqlite3.connect(DB_FILE)
@@ -234,11 +234,12 @@ def update_outcome_in_db(previous_hour_utc, outcome, p_start_previous, p_start_c
         hour_start_str = previous_hour_utc.strftime('%Y-%m-%d %H:%M:%S')
         hour_end_str = (previous_hour_utc + timedelta(hours=1)).strftime('%Y-%m-%d %H:%M:%S')
 
+        # Update both the generic 'outcome' and the asset-specific 'outcome_xrp' columns
         cursor.execute("""
             UPDATE polydata 
-            SET outcome = ? 
+            SET outcome = ?, outcome_xrp = ?
             WHERE timestamp >= ? AND timestamp < ?
-        """, (outcome, hour_start_str, hour_end_str))
+        """, (outcome, outcome, hour_start_str, hour_end_str))
         
         conn.commit()
         conn.close()
