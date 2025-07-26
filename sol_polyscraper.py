@@ -108,7 +108,7 @@ def place_order(side, token_id, price, size_usd):
         if order_price <= 0:
             print(f"  --> Invalid order price: {order_price}")
             return False
-            
+        
         size_shares = size_usd / order_price
 
         # Create order with a 2-minute expiration
@@ -789,8 +789,8 @@ def collect_data_once():
                     
                     # Manage positions based on the calculated delta
                     manage_positions(delta, token_id_yes, token_id_no, price_yes, price_no)
-            else:
-                print("Trading is disabled for SOL.")
+                else:
+                    print("Trading is disabled for SOL.")
             # --- End Order Placement Logic ---
 
             t3 = datetime.now(UTC)
@@ -811,7 +811,7 @@ def get_positions_from_data_api():
     """Fetches user positions from the dedicated Data API."""
     if not POLYMARKET_PROXY_ADDRESS:
         print("Cannot fetch from Data API without POLYMARKET_PROXY_ADDRESS.")
-        return []
+        return None
     try:
         url = f"{DATA_API_URL}/get_user_positions"
         params = {"user": POLYMARKET_PROXY_ADDRESS}
@@ -820,7 +820,7 @@ def get_positions_from_data_api():
         return response.json()
     except requests.RequestException as e:
         print(f"Error fetching positions from Data API: {e}")
-        return []
+        return None
 
 
 def get_user_state(token_id_yes, token_id_no):
@@ -838,6 +838,12 @@ def get_user_state(token_id_yes, token_id_no):
         
         # Get positions from the reliable Data API
         all_positions = get_positions_from_data_api()
+
+        # If fetching positions fails, we can't know the state, so abort.
+        if all_positions is None:
+            print("-> Could not retrieve positions from Data API. Aborting state update.")
+            return None, None, None
+        
         position_yes = 0.0
         position_no = 0.0
 
@@ -881,8 +887,8 @@ def manage_positions(delta, token_id_yes, token_id_no, price_yes, price_no):
 
     usdc_balance, position_yes, position_no = get_user_state(token_id_yes, token_id_no)
 
-    if usdc_balance is None:
-        print("-> Could not retrieve user balance, aborting position management.")
+    if usdc_balance is None or position_yes is None or position_no is None:
+        print("-> Could not retrieve full user state (balance or positions). Aborting position management.")
         return
 
     print(f"-> State: YES shares={position_yes:.4f}, NO shares={position_no:.4f}, USDC=${usdc_balance:.2f}")
