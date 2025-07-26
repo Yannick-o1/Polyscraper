@@ -862,6 +862,8 @@ def get_user_state(token_id_yes, token_id_no):
         # --- YES Token Position ---
         position_yes = 0.0
         trades_yes = get_all_trades_for_token(token_id_yes)
+        if trades_yes is None: # Defensive check in case the API returns None
+            trades_yes = []
         for trade in trades_yes:
             size = float(trade.get("size", 0.0))
             maker_address = trade.get("maker_address", "").lower()
@@ -883,6 +885,8 @@ def get_user_state(token_id_yes, token_id_no):
         # --- NO Token Position ---
         position_no = 0.0
         trades_no = get_all_trades_for_token(token_id_no)
+        if trades_no is None: # Defensive check in case the API returns None
+            trades_no = []
         for trade in trades_no:
             size = float(trade.get("size", 0.0))
             maker_address = trade.get("maker_address", "").lower()
