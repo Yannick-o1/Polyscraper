@@ -82,7 +82,7 @@ except Exception as e:
     print("Predictions will be disabled.")
     model = None
 
-def place_order(side, token_id, price, size_usd):
+def place_order(side, token_id, price, size_shares):
     """
     Places a BUY or SELL order on Polymarket.
     
@@ -90,28 +90,24 @@ def place_order(side, token_id, price, size_usd):
         side (str): "BUY" or "SELL"
         token_id (str): The token ID for the order.
         price (float): The price for the order (0-1 range).
-        size_usd (float): Order size in USD.
+        size_shares (float): Order size in shares.
     
     Returns:
         bool: True if order placed successfully, False otherwise
     """
-    print(f"  --> Attempting to place order: {side} ${size_usd:.2f} of token {token_id} at price {price:.2f}")
+    order_price = round(price, 2)
+    size_usd = size_shares * order_price
+    print(f"  --> Attempting to place order: {side} {size_shares:.2f} shares of token {token_id} at price {order_price:.2f} (${size_usd:.2f} total)")
+    
     if not polymarket_client:
         print("  --> Polymarket client not available")
         return False
     
-    if size_usd <= 0.1: # Minimum order size to avoid dust
-        print(f"  --> Order size ${size_usd:.2f} too small, skipping.")
+    if size_shares < 0.1: # Minimum share amount to avoid dust
+        print(f"  --> Order size {size_shares:.2f} shares too small, skipping.")
         return True # Return true to not halt any batch processing
 
     try:
-        # Calculate order size in shares
-        order_price = round(price, 2)
-        if order_price <= 0.01: # Prevent division by zero or tiny price
-            order_price = 0.01
-            
-        size_shares = size_usd / order_price
-
         # Check against the minimum share size required by the API
         if size_shares < MINIMUM_ORDER_SIZE_SHARES:
             print(f"  --> Order size of {size_shares:.2f} shares is below the minimum of {MINIMUM_ORDER_SIZE_SHARES}, skipping.")
@@ -875,65 +871,50 @@ def manage_positions(delta, token_id_yes, token_id_no, price_yes, price_no):
     value_yes_liquidatable = calculate_position_value(token_id_yes, position_yes)
     value_no_liquidatable = calculate_position_value(token_id_no, position_no)
     
-    # Value of current holdings at midpoint price for trading calculations
-    value_yes_midpoint = position_yes * price_yes
-    value_no_midpoint = position_no * price_no
-    
-    print(f"-> Value (Liquidatable): YES=${value_yes_liquidatable:.2f}, NO=${value_no_liquidatable:.2f}")
-    print(f"-> Value (Midpoint):    YES=${value_yes_midpoint:.2f}, NO=${value_no_midpoint:.2f}")
-
     # Dynamically calculate total bankroll using conservative liquidatable value
     total_bankroll = usdc_balance + value_yes_liquidatable + value_no_liquidatable
     print(f"-> Total Bankroll (USDC + Positions) = ${total_bankroll:.2f}")
 
-    # --- Target Calculation ---
+    # --- Target Calculation (in Shares) ---
     print("-> Calculating Target...")
-    target_value = 0
-    target_direction = None
+    target_shares_yes = 0.0
+    target_shares_no = 0.0
 
     if abs(delta) < PROBABILITY_DELTA_DEADZONE_THRESHOLD:
         print(f"-> Verdict: Delta |{delta:.2f}| is within dead zone (< {PROBABILITY_DELTA_DEADZONE_THRESHOLD}). Goal is to close all positions.")
-        target_value = 0
+        # Target shares are 0 for both YES and NO.
     else:
-        target_value = (abs(delta) / 100.0) * total_bankroll * BANKROLL_USAGE_FRACTION
+        target_value_usd = (abs(delta) / 100.0) * total_bankroll * BANKROLL_USAGE_FRACTION
         target_direction = "UP" if delta > 0 else "DOWN"
-        print(f"-> Verdict: Target is a {target_direction} position of ${target_value:.2f}")
+        print(f"-> Verdict: Target is a {target_direction} position of ${target_value_usd:.2f}")
 
-    # --- Position Adjustment ---
-    print("-> Adjusting Positions...")
-    # 1. Close unwanted positions first. To sell the entire position, the order value must be shares * sell_price.
-    if target_direction != "UP" and position_yes > 0.1: # Use a small threshold to avoid dust
-        print(f"-> Action: Target is not UP. Closing YES position of {position_yes:.4f} shares.")
-        place_order(SELL, token_id_yes, price_yes, value_yes_midpoint)
+        if target_direction == "UP":
+            if price_yes > 0:
+                target_shares_yes = target_value_usd / price_yes
+        else: # DOWN
+            if price_no > 0:
+                target_shares_no = target_value_usd / price_no
     
-    if target_direction != "DOWN" and position_no > 0.1: # Use a small threshold
-        print(f"-> Action: Target is not DOWN. Closing NO position of {position_no:.4f} shares.")
-        place_order(SELL, token_id_no, price_no, value_no_midpoint)
+    print(f"-> Target Shares: YES={target_shares_yes:.4f}, NO={target_shares_no:.4f}")
 
-    # 2. Adjust target position. The adjustment must be against the position's value at the trading price (midpoint).
-    if target_direction == "UP":
-        adjustment_usd = target_value - value_yes_midpoint
-        print(f"-> UP Adjustment: Target=${target_value:.2f}, Current=${value_yes_midpoint:.2f}, Diff=${adjustment_usd:.2f}")
-        if adjustment_usd > 0.1: # Threshold to avoid tiny orders
-            print(f"-> Action: BUY ${adjustment_usd:.2f} of YES token.")
-            place_order(BUY, token_id_yes, price_yes, adjustment_usd)
-        elif adjustment_usd < -0.1: # Threshold to avoid tiny orders
-            print(f"-> Action: SELL ${abs(adjustment_usd):.2f} of YES token.")
-            place_order(SELL, token_id_yes, price_yes, abs(adjustment_usd))
-        else:
-            print("-> Action: No significant adjustment needed for UP position.")
+    # --- Position Adjustment (in Shares) ---
+    print("-> Adjusting Positions...")
 
-    elif target_direction == "DOWN":
-        adjustment_usd = target_value - value_no_midpoint
-        print(f"-> DOWN Adjustment: Target=${target_value:.2f}, Current=${value_no_midpoint:.2f}, Diff=${adjustment_usd:.2f}")
-        if adjustment_usd > 0.1: # Threshold to avoid tiny orders
-            print(f"-> Action: BUY ${adjustment_usd:.2f} of NO token.")
-            place_order(BUY, token_id_no, price_no, adjustment_usd)
-        elif adjustment_usd < -0.1:
-            print(f"-> Action: SELL ${abs(adjustment_usd):.2f} of NO token.")
-            place_order(SELL, token_id_no, price_no, abs(adjustment_usd))
-        else:
-            print("-> Action: No significant adjustment needed for DOWN position.")
+    # 1. Adjust YES position
+    adjustment_shares_yes = target_shares_yes - position_yes
+    print(f"-> YES adjustment: Have {position_yes:.4f}, want {target_shares_yes:.4f}, diff={adjustment_shares_yes:.4f}")
+    if adjustment_shares_yes > 0.1: # Buy YES
+        place_order(BUY, token_id_yes, price_yes, adjustment_shares_yes)
+    elif adjustment_shares_yes < -0.1: # Sell YES
+        place_order(SELL, token_id_yes, price_yes, abs(adjustment_shares_yes))
+    
+    # 2. Adjust NO position
+    adjustment_shares_no = target_shares_no - position_no
+    print(f"-> NO adjustment: Have {position_no:.4f}, want {target_shares_no:.4f}, diff={adjustment_shares_no:.4f}")
+    if adjustment_shares_no > 0.1: # Buy NO
+        place_order(BUY, token_id_no, price_no, adjustment_shares_no)
+    elif adjustment_shares_no < -0.1: # Sell NO
+        place_order(SELL, token_id_no, price_no, abs(adjustment_shares_no))
             
     print("--- End Position Management (XRP) ---")
 
