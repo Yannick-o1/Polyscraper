@@ -861,14 +861,14 @@ def get_user_state(token_id_yes, token_id_no):
             asset_type=AssetType.CONDITIONAL, token_id=token_id_yes, signature_type=-1
         )
         yes_account_info = polymarket_client.get_balance_allowance(yes_balance_params)
-        position_yes = float(yes_account_info["balance"])
+        position_yes = float(yes_account_info["balance"]) / 1_000_000.0
 
         # 3. Fetch NO Token Balance
         no_balance_params = BalanceAllowanceParams(
             asset_type=AssetType.CONDITIONAL, token_id=token_id_no, signature_type=-1
         )
         no_account_info = polymarket_client.get_balance_allowance(no_balance_params)
-        position_no = float(no_account_info["balance"])
+        position_no = float(no_account_info["balance"]) / 1_000_000.0
 
         return usdc_balance, position_yes, position_no
     except Exception as e:
