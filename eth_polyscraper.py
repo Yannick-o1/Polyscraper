@@ -29,6 +29,7 @@ except ImportError:
 # --- Globals ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CLOB_API_URL = "https://clob.polymarket.com"
+DATA_API_URL = "https://data.polymarket.com/v1"  # Data API URL
 MARKETS_CSV_FILE = os.path.join(BASE_DIR, "eth_polymarkets.csv")
 DB_FILE = os.path.join(BASE_DIR, "eth_polyscraper.db")
 MODEL_FILE = os.path.join(BASE_DIR, "eth_lgbm.txt")
@@ -806,6 +807,22 @@ def collect_data_once():
         print(f"An unexpected error occurred during data collection for ETH: {e}")
 
 
+def get_positions_from_data_api():
+    """Fetches user positions from the dedicated Data API."""
+    if not POLYMARKET_PROXY_ADDRESS:
+        print("Cannot fetch from Data API without POLYMARKET_PROXY_ADDRESS.")
+        return []
+    try:
+        url = f"{DATA_API_URL}/get_user_positions"
+        params = {"user": POLYMARKET_PROXY_ADDRESS}
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        print(f"Error fetching positions from Data API: {e}")
+        return []
+
+
 def get_user_state(token_id_yes, token_id_no):
     """Fetches user's USDC balance and positions in the given market."""
     if not polymarket_client:
@@ -819,24 +836,16 @@ def get_user_state(token_id_yes, token_id_no):
         # The balance is returned in the smallest unit (6 decimals), so we divide by 1,000,000
         usdc_balance = float(account_info["balance"]) / 1_000_000.0
         
-        # Calculate net position from all historical trades for each token
+        # Get positions from the reliable Data API
+        all_positions = get_positions_from_data_api()
         position_yes = 0.0
-        trades_yes = polymarket_client.get_trades(TradeParams(asset_id=token_id_yes))
-        for trade in trades_yes:
-            size = float(trade.get("size", 0.0))
-            if trade.get("side") == "buy":
-                position_yes += size
-            elif trade.get("side") == "sell":
-                position_yes -= size
-
         position_no = 0.0
-        trades_no = polymarket_client.get_trades(TradeParams(asset_id=token_id_no))
-        for trade in trades_no:
-            size = float(trade.get("size", 0.0))
-            if trade.get("side") == "buy":
-                position_no += size
-            elif trade.get("side") == "sell":
-                position_no -= size
+
+        for pos in all_positions:
+            if pos.get("token_id") == token_id_yes:
+                position_yes = float(pos.get("net_quantity", 0.0))
+            elif pos.get("token_id") == token_id_no:
+                position_no = float(pos.get("net_quantity", 0.0))
 
         return usdc_balance, position_yes, position_no
     except Exception as e:
