@@ -229,7 +229,7 @@ def update_outcome_in_db(previous_hour_utc, outcome, p_start_previous, p_start_c
 
         cursor.execute("""
             UPDATE polydata 
-            SET outcome_eth = ? 
+            SET outcome = ? 
             WHERE timestamp >= ? AND timestamp < ?
         """, (outcome, hour_start_str, hour_end_str))
         
@@ -366,12 +366,12 @@ def init_database():
     columns = [column[1] for column in cursor.fetchall()]
     if 'eth_usdt_spot' not in columns:
         cursor.execute("ALTER TABLE polydata ADD COLUMN eth_usdt_spot REAL")
-    if 'ofi_eth' not in columns:
-        cursor.execute("ALTER TABLE polydata ADD COLUMN ofi_eth REAL")
-    if 'p_up_prediction_eth' not in columns:
-        cursor.execute("ALTER TABLE polydata ADD COLUMN p_up_prediction_eth REAL")
-    if 'outcome_eth' not in columns:
-        cursor.execute("ALTER TABLE polydata ADD COLUMN outcome_eth TEXT")
+    if 'ofi' not in columns:
+        cursor.execute("ALTER TABLE polydata ADD COLUMN ofi REAL")
+    if 'p_up_prediction' not in columns:
+        cursor.execute("ALTER TABLE polydata ADD COLUMN p_up_prediction REAL")
+    if 'outcome' not in columns:
+        cursor.execute("ALTER TABLE polydata ADD COLUMN outcome TEXT")
 
     conn.commit()
     conn.close()
@@ -749,8 +749,8 @@ def collect_data_once():
                 'timestamp': t0.strftime('%Y-%m-%d %H:%M:%S'),
                 'market_name': market_name,
                 'eth_usdt_spot': eth_price,
-                'ofi_eth': ofi,
-                'p_up_prediction_eth': p_up_prediction,
+                'ofi': ofi,
+                'p_up_prediction': p_up_prediction,
                 'token_id': token_id_yes, # Log the YES token ID for consistency
                 'best_bid': best_bid_price,
                 'best_ask': best_ask_price
@@ -760,8 +760,8 @@ def collect_data_once():
             conn = sqlite3.connect(DB_FILE)
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO polydata (timestamp, market_name, token_id, best_bid, best_ask, eth_usdt_spot, ofi_eth, p_up_prediction_eth)
-                VALUES (:timestamp, :market_name, :token_id, :best_bid, :best_ask, :eth_usdt_spot, :ofi_eth, :p_up_prediction_eth)
+                INSERT INTO polydata (timestamp, market_name, token_id, best_bid, best_ask, eth_usdt_spot, ofi, p_up_prediction)
+                VALUES (:timestamp, :market_name, :token_id, :best_bid, :best_ask, :eth_usdt_spot, :ofi, :p_up_prediction)
             ''', data_row)
             conn.commit()
             conn.close()
