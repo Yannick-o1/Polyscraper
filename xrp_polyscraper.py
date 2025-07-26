@@ -361,7 +361,7 @@ def init_database():
         )
     ''')
     
-    # Check if the xrp_usdt_spot column exists and add it if it doesn't
+    # Check if the columns exist and add them if they don't
     cursor.execute("PRAGMA table_info(polydata)")
     columns = [column[1] for column in cursor.fetchall()]
     if 'xrp_usdt_spot' not in columns:
@@ -711,8 +711,8 @@ def collect_data_once():
                 'timestamp': t0.strftime('%Y-%m-%d %H:%M:%S'),
                 'market_name': market_name,
                 'xrp_usdt_spot': xrp_price,
-                'ofi_xrp': ofi,
-                'p_up_prediction_xrp': p_up_prediction,
+                'ofi': ofi,
+                'p_up_prediction': p_up_prediction,
                 'token_id': token_id_yes, # Log the YES token ID for consistency
                 'best_bid': best_bid_price,
                 'best_ask': best_ask_price
