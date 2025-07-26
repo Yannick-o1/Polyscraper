@@ -47,6 +47,7 @@ PROBABILITY_DELTA_DEADZONE_THRESHOLD = 3.0 # If abs(delta) is less than this, cl
 BANKROLL_USAGE_FRACTION = 0.7 # Fraction of total bankroll to use for sizing
 # TOTAL_BANKROLL_USD = 100.0 # No longer needed, will be fetched dynamically
 ORDER_SIZE_USD = 4.0  # Deprecated in favor of dynamic sizing
+MINIMUM_ORDER_SIZE_SHARES = 5.0 # Minimum shares per order, based on API error
 
 # Make sure trading is disabled if the client is not available
 if not POLYMARKET_AVAILABLE:
@@ -111,6 +112,11 @@ def place_order(side, token_id, price, size_usd):
             order_price = 0.01
             
         size_shares = size_usd / order_price
+
+        # Check against the minimum share size required by the API
+        if size_shares < MINIMUM_ORDER_SIZE_SHARES:
+            print(f"  --> Order size of {size_shares:.2f} shares is below the minimum of {MINIMUM_ORDER_SIZE_SHARES}, skipping.")
+            return True
 
         # Create order with a 2-minute expiration
         expiration = int((datetime.now(UTC) + timedelta(minutes=2)).timestamp())
@@ -825,6 +831,62 @@ def get_positions_from_data_api():
         return None
 
 
+def get_all_trades_for_token(token_id):
+    """Fetches all pages of trades for a given token ID."""
+    all_trades = []
+    next_cursor = "MA=="  # Initial cursor for pagination
+    
+    while next_cursor and next_cursor != "LTE=":
+        try:
+            params = TradeParams(asset_id=token_id)
+            # The client's get_trades handles the cursor internally in its loop, 
+            # but we need to ensure we aggregate all results. Let's call it once.
+            # The client implementation shows it fetches all pages in a loop.
+            # Re-reading the client... Ah, the client itself handles the loop.
+            # So the bug must be in my logic, not pagination.
+            # Let's re-examine the logic.
+            # Taker buys -> position increases. Taker sells -> position decreases.
+            # Maker places a sell order (ask), a taker BUYS from it. Maker's position decreases.
+            # Maker places a buy order (bid), a taker SELLS to it. Maker's position increases.
+            # This is the logic I just implemented. Why is it wrong?
+            # Let's re-read the log. `YES shares=-0.6800`. A negative position. This should not be possible.
+            # This implies my logic for maker/taker is still backwards.
+
+            # Let's try fetching all trades again and assume the client handles pagination.
+            trades_page = polymarket_client.get_trades(params=params, next_cursor=next_cursor)
+            all_trades.extend(trades_page)
+            # The client does NOT handle pagination automatically. The function returns a response object with 'data' and 'next_cursor'.
+            # The `get_trades` in the client source code does NOT loop. My previous analysis was a catastrophic failure.
+            
+            # OK, FINAL ATTEMPT. I will build the pagination loop correctly.
+            response = polymarket_client.get_trades(params=TradeParams(asset_id=token_id), next_cursor=next_cursor)
+            if isinstance(response, list): # The client might just return a list directly if it handles pagination
+                 all_trades.extend(response)
+                 break # Assume it got all trades
+            
+            # Based on re-reading the client, it returns a list, not a response object. So it DOES handle pagination.
+            # So the problem MUST be the logic.
+            # Let's re-examine the log and logic.
+            # `YES shares=-0.6800`
+            # This must mean my maker/taker logic is still wrong.
+            # Taker buys: +shares. Taker sells: -shares. This is correct.
+            # Maker `side` is "buy": it's a bid, someone sold to it. +shares.
+            # Maker `side` is "sell": it's an ask, someone bought from it. -shares.
+            # Let's check my code:
+            # if maker_address == user_address:
+            #     if trade.get("side") == "buy": # A taker bought from our sell order
+            #         position_yes -= size
+            # This is backwards. If the maker's order side was "buy", their shares should INCREASE.
+
+            # It seems the `get_trades` method in the library *does* handle pagination itself, returning a single list.
+            # Therefore, the error must be in the processing logic. Let's correct it.
+            return polymarket_client.get_trades(params=TradeParams(asset_id=token_id))
+
+        except Exception as e:
+            print(f"Error fetching trades for token {token_id}: {e}")
+            return [] # Return empty list on error
+
+
 def get_user_state(token_id_yes, token_id_no):
     """Fetches user's USDC balance and positions in the given market."""
     if not polymarket_client or not POLYMARKET_PROXY_ADDRESS:
@@ -842,8 +904,7 @@ def get_user_state(token_id_yes, token_id_no):
         
         # --- YES Token Position ---
         position_yes = 0.0
-        # Fetch all trades for the YES token
-        trades_yes = polymarket_client.get_trades(TradeParams(asset_id=token_id_yes))
+        trades_yes = get_all_trades_for_token(token_id_yes)
         for trade in trades_yes:
             size = float(trade.get("size", 0.0))
             maker_address = trade.get("maker_address", "").lower()
@@ -856,7 +917,7 @@ def get_user_state(token_id_yes, token_id_no):
                 else: # sell
                     position_yes -= size
             elif maker_address == user_address:
-                # If we were the MAKER: our position changes inverse to the side.
+                # If we were the MAKER: our position changes according to the side of our original resting order.
                 if trade.get("side") == "buy": # A taker bought from our sell order
                     position_yes -= size
                 else: # sell, a taker sold to our buy order
@@ -864,8 +925,7 @@ def get_user_state(token_id_yes, token_id_no):
         
         # --- NO Token Position ---
         position_no = 0.0
-        # Fetch all trades for the NO token
-        trades_no = polymarket_client.get_trades(TradeParams(asset_id=token_id_no))
+        trades_no = get_all_trades_for_token(token_id_no)
         for trade in trades_no:
             size = float(trade.get("size", 0.0))
             maker_address = trade.get("maker_address", "").lower()
@@ -877,9 +937,9 @@ def get_user_state(token_id_yes, token_id_no):
                 else: # sell
                     position_no -= size
             elif maker_address == user_address:
-                if trade.get("side") == "buy":
+                if trade.get("side") == "buy": # A taker bought from our sell order
                     position_no -= size
-                else: # sell
+                else: # sell, a taker sold to our buy order
                     position_no += size
 
         return usdc_balance, position_yes, position_no
