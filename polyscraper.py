@@ -905,6 +905,12 @@ def get_user_state(token_id_yes, token_id_no):
         # --- YES Token Position ---
         position_yes = 0.0
         trades_yes = get_all_trades_for_token(token_id_yes)
+        
+        # --- TEMPORARY DEBUGGING ---
+        print("--- RAW YES TRADES ---")
+        print(trades_yes)
+        print("--- END RAW YES TRADES ---")
+
         if trades_yes is None: # Defensive check in case the API returns None
             trades_yes = []
         for trade in trades_yes:
@@ -928,6 +934,12 @@ def get_user_state(token_id_yes, token_id_no):
         # --- NO Token Position ---
         position_no = 0.0
         trades_no = get_all_trades_for_token(token_id_no)
+
+        # --- TEMPORARY DEBUGGING ---
+        print("--- RAW NO TRADES ---")
+        print(trades_no)
+        print("--- END RAW NO TRADES ---")
+
         if trades_no is None: # Defensive check in case the API returns None
             trades_no = []
         for trade in trades_no:
