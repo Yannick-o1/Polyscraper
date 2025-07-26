@@ -893,23 +893,64 @@ def get_positions_from_data_api():
 
 
 def get_user_state(token_id_yes, token_id_no):
-    """Fetches user's USDC balance and positions from local state."""
-    global current_positions
-    if not polymarket_client:
+    """Fetches user's USDC balance and positions in the given market."""
+    if not polymarket_client or not POLYMARKET_PROXY_ADDRESS:
         return None, None, None
-
     try:
-        # Correctly fetch the USDC balance using the verified method and parameters
+        # 1. Fetch USDC Balance (this part is confirmed working)
         balance_params = BalanceAllowanceParams(
             asset_type=AssetType.COLLATERAL, signature_type=-1
         )
         account_info = polymarket_client.get_balance_allowance(balance_params)
-        # The balance is returned in the smallest unit (6 decimals), so we divide by 1,000,000
         usdc_balance = float(account_info["balance"]) / 1_000_000.0
-        
-        # Return positions from our in-memory state, which is loaded/managed in collect_data_once
-        return usdc_balance, current_positions.get("shares_yes", 0.0), current_positions.get("shares_no", 0.0)
 
+        # 2. Calculate Net Position from Trade History
+        user_address = POLYMARKET_PROXY_ADDRESS.lower()
+        
+        # --- YES Token Position ---
+        position_yes = 0.0
+        # Fetch all trades for the YES token
+        trades_yes = polymarket_client.get_trades(TradeParams(asset_id=token_id_yes))
+        for trade in trades_yes:
+            size = float(trade.get("size", 0.0))
+            maker_address = trade.get("maker_address", "").lower()
+            taker_address = trade.get("taker_address", "").lower()
+
+            if maker_address == user_address:
+                # If we were the maker, our position changes based on the side of our original order
+                if trade.get("side") == "buy":
+                    position_yes += size
+                else: # sell
+                    position_yes -= size
+            elif taker_address == user_address:
+                # If we were the taker, our position changes based on the side of the trade we filled
+                # A "buy" trade means the taker bought, a "sell" trade means the taker sold.
+                if trade.get("side") == "buy":
+                    position_yes += size
+                else: # sell
+                    position_yes -= size
+        
+        # --- NO Token Position ---
+        position_no = 0.0
+        # Fetch all trades for the NO token
+        trades_no = polymarket_client.get_trades(TradeParams(asset_id=token_id_no))
+        for trade in trades_no:
+            size = float(trade.get("size", 0.0))
+            maker_address = trade.get("maker_address", "").lower()
+            taker_address = trade.get("taker_address", "").lower()
+
+            if maker_address == user_address:
+                if trade.get("side") == "buy":
+                    position_no += size
+                else: # sell
+                    position_no -= size
+            elif taker_address == user_address:
+                if trade.get("side") == "buy":
+                    position_no += size
+                else: # sell
+                    position_no -= size
+
+        return usdc_balance, position_yes, position_no
     except Exception as e:
         print(f"Error getting user state: {e}")
         return None, None, None
