@@ -34,7 +34,6 @@ DATA_API_URL = "https://gamma-api.polymarket.com"  # Correct, verified Data API 
 MARKETS_CSV_FILE = os.path.join(BASE_DIR, "xrp_polymarkets.csv")
 DB_FILE = os.path.join(BASE_DIR, "xrp_polyscraper.db")
 MODEL_FILE = os.path.join(BASE_DIR, "xrp_lgbm.txt")
-POSITION_STATE_FILE = os.path.join(BASE_DIR, "xrp_position_state.json")
 ASSET_SYMBOL = "XRPUSDT"
 
 # --- Polymarket Configuration ---
@@ -81,47 +80,6 @@ except Exception as e:
     print(f"Error loading model file '{MODEL_FILE}': {e}")
     print("Predictions will be disabled.")
     model = None
-
-# --- In-Memory Position State ---
-# This will hold the current net position for the tokens in the active market.
-# It will be reset when the market (and thus token IDs) changes.
-# This global variable will be populated by loading from the state file.
-current_positions = {}
-
-def load_position_state():
-    """Loads the position state from a JSON file."""
-    if not os.path.exists(POSITION_STATE_FILE):
-        return None
-    try:
-        with open(POSITION_STATE_FILE, 'r') as f:
-            return json.load(f)
-    except (json.JSONDecodeError, IOError) as e:
-        print(f"Error loading position state file: {e}. Starting fresh.")
-        return None
-
-def save_position_state(state):
-    """Saves the position state to a JSON file."""
-    try:
-        with open(POSITION_STATE_FILE, 'w') as f:
-            json.dump(state, f, indent=4)
-    except IOError as e:
-        print(f"Error saving position state file: {e}")
-
-def update_local_position(token_id, side, size_shares):
-    """Updates the in-memory position state after a trade and saves it to a file."""
-    global current_positions
-    if token_id == current_positions["token_id_yes"]:
-        if side == BUY:
-            current_positions["shares_yes"] += size_shares
-        elif side == SELL:
-            current_positions["shares_yes"] -= size_shares
-    elif token_id == current_positions["token_id_no"]:
-        if side == BUY:
-            current_positions["shares_no"] += size_shares
-        elif side == SELL:
-            current_positions["shares_no"] -= size_shares
-    print(f"  --> Updated local state: YES shares={current_positions['shares_yes']:.4f}, NO shares={current_positions['shares_no']:.4f}")
-    save_position_state(current_positions)
 
 def place_order(side, token_id, price, size_usd):
     """
@@ -170,7 +128,6 @@ def place_order(side, token_id, price, size_usd):
         
         if response.get('success', False):
             print(f"  --> ✅ Order placed: {side} {size_shares:.2f} shares of token {token_id} at ${order_price:.2f} (${size_usd:.2f} total)")
-            update_local_position(token_id, side, size_shares)
             return True
         else:
             print(f"  --> ❌ Order failed: {response.get('errorMsg', 'Unknown error')}")
@@ -708,7 +665,6 @@ def collect_data_once():
     """Collect data for one minute and log it to the SQLite database."""
     # Ensure the database and tables exist before any other operation
     init_database()
-    global current_positions
     
     try:
         t0 = datetime.now(UTC)
@@ -742,28 +698,6 @@ def collect_data_once():
         # --- End Prediction Logic ---
 
         token_id_yes, token_id_no, market_name = get_current_market_token_ids()
-
-        if not token_id_yes:
-            print(f"({datetime.now(UTC).strftime('%H:%M:%S.%f')}) No active market found for the current hour.")
-            return
-
-        # --- Load or Initialize Position State ---
-        loaded_state = load_position_state()
-        if loaded_state and loaded_state.get("token_id_yes") == token_id_yes:
-            current_positions = loaded_state
-            print("--- Loaded existing position state. ---")
-        else:
-            if loaded_state:
-                print("--- New market detected, resetting position state. ---")
-            else:
-                print("--- No position state file found, creating new state. ---")
-            current_positions = {
-                "token_id_yes": token_id_yes,
-                "shares_yes": 0.0,
-                "token_id_no": token_id_no,
-                "shares_no": 0.0,
-            }
-            save_position_state(current_positions)
 
         t1 = datetime.now(UTC)
         print(f"({t1.strftime('%H:%M:%S.%f')}) Found token IDs. Elapsed: {(t1-t0).total_seconds():.4f}s")
@@ -877,19 +811,18 @@ def get_user_state(token_id_yes, token_id_no):
             maker_address = trade.get("maker_address", "").lower()
             taker_address = trade.get("taker_address", "").lower()
 
-            if maker_address == user_address:
-                # If we were the maker, our position changes based on the side of our original order
+            if taker_address == user_address:
+                # If we were the TAKER: our position changes according to the side.
                 if trade.get("side") == "buy":
                     position_yes += size
                 else: # sell
                     position_yes -= size
-            elif taker_address == user_address:
-                # If we were the taker, our position changes based on the side of the trade we filled
-                # A "buy" trade means the taker bought, a "sell" trade means the taker sold.
-                if trade.get("side") == "buy":
-                    position_yes += size
-                else: # sell
+            elif maker_address == user_address:
+                # If we were the MAKER: our position changes inverse to the side.
+                if trade.get("side") == "buy": # A taker bought from our sell order
                     position_yes -= size
+                else: # sell, a taker sold to our buy order
+                    position_yes += size
         
         # --- NO Token Position ---
         position_no = 0.0
@@ -900,16 +833,16 @@ def get_user_state(token_id_yes, token_id_no):
             maker_address = trade.get("maker_address", "").lower()
             taker_address = trade.get("taker_address", "").lower()
 
-            if maker_address == user_address:
+            if taker_address == user_address:
                 if trade.get("side") == "buy":
                     position_no += size
                 else: # sell
                     position_no -= size
-            elif taker_address == user_address:
+            elif maker_address == user_address:
                 if trade.get("side") == "buy":
-                    position_no += size
-                else: # sell
                     position_no -= size
+                else: # sell
+                    position_no += size
 
         return usdc_balance, position_yes, position_no
     except Exception as e:
