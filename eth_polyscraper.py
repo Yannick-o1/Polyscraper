@@ -26,6 +26,7 @@ CLOB_API_URL = "https://clob.polymarket.com"
 MARKETS_CSV_FILE = os.path.join(BASE_DIR, "eth_polymarkets.csv")
 DB_FILE = os.path.join(BASE_DIR, "eth_polyscraper.db")
 MODEL_FILE = os.path.join(BASE_DIR, "eth_lgbm.txt")
+ASSET_SYMBOL = "ETHUSDT"
 
 # --- Polymarket Configuration ---
 TRADING_ENABLED = False  # SET TO True TO ENABLE LIVE TRADING
@@ -194,7 +195,7 @@ def get_p_start_from_binance_api_call(hour_start_utc):
         start_time_ms = int(hour_start_utc.timestamp() * 1000)
         
         params = {
-            "symbol": "ETHUSDT",
+            "symbol": ASSET_SYMBOL,
             "interval": "1m",
             "startTime": start_time_ms,
             "limit": 1
@@ -243,13 +244,13 @@ def get_binance_data_and_ofi():
     try:
         # Fetch the last 1000 trades to ensure we have recent data
         resp = requests.get("https://api.binance.com/api/v3/trades", 
-                           params={"symbol": "ETHUSDT", "limit": 1000}, timeout=5)
+                           params={"symbol": ASSET_SYMBOL, "limit": 1000}, timeout=5)
         resp.raise_for_status()
         trades = resp.json()
         
         if not trades:
             # Fallback to ticker price if no trades are returned
-            price_resp = requests.get("https://api.binance.com/api/v3/ticker/price", params={"symbol": "ETHUSDT"})
+            price_resp = requests.get("https://api.binance.com/api/v3/ticker/price", params={"symbol": ASSET_SYMBOL})
             price_resp.raise_for_status()
             latest_price = float(price_resp.json()['price'])
             return latest_price, 0.0
