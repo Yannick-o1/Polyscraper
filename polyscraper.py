@@ -815,7 +815,8 @@ def get_user_state(token_id_yes, token_id_no):
             asset_type=AssetType.COLLATERAL, signature_type=-1
         )
         account_info = polymarket_client.get_balance_allowance(balance_params)
-        usdc_balance = float(account_info["balance"])
+        # The balance is returned in the smallest unit (6 decimals), so we divide by 1,000,000
+        usdc_balance = float(account_info["balance"]) / 1_000_000.0
         
         # Use the correct get_orders() method to fetch open orders
         orders = polymarket_client.get_orders()
