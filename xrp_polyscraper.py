@@ -13,7 +13,7 @@ import time
 # Polymarket imports
 try:
     from py_clob_client.client import ClobClient
-    from py_clob_client.clob_types import OrderArgs, OrderType
+    from py_clob_client.clob_types import OrderArgs, OrderType, BalanceAllowanceParams
     from py_clob_client.order_builder.constants import BUY, SELL
     POLYMARKET_AVAILABLE = True
 except ImportError:
@@ -766,8 +766,10 @@ def get_user_state(token_id_yes, token_id_no):
     if not polymarket_client:
         return None, None, None
     try:
-        account_info = polymarket_client.get_user_account()
-        usdc_balance = float(account_info["usdc_balance"])
+        # Correctly fetch the USDC balance using the verified method
+        balance_params = BalanceAllowanceParams(signature_type=-1)
+        account_info = polymarket_client.get_balance_allowance(balance_params)
+        usdc_balance = float(account_info["balance"])
         
         positions = polymarket_client.get_user_positions()
         
