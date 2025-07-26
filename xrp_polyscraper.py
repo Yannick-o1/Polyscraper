@@ -10,12 +10,59 @@ import numpy as np
 import os
 import time
 
+# Polymarket imports
+try:
+    from py_clob_client.client import ClobClient
+    from py_clob_client.clob_types import OrderArgs, OrderType
+    from py_clob_client.order_builder.constants import BUY, SELL
+    POLYMARKET_AVAILABLE = True
+except ImportError:
+    print("Warning: py-clob-client not installed. Order placement will be disabled.")
+    POLYMARKET_AVAILABLE = False
+
 # --- Globals ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CLOB_API_URL = "https://clob.polymarket.com"
 MARKETS_CSV_FILE = os.path.join(BASE_DIR, "xrp_polymarkets.csv")
-DB_FILE = os.path.join(BASE_DIR, "xrp_polyscraper.db")
+DB_FILE = os.path.join(BASE_DIR, "polyscraper.db")
 MODEL_FILE = os.path.join(BASE_DIR, "xrp_lgbm.txt")
+
+# --- Polymarket Configuration ---
+TRADING_ENABLED = False  # SET TO True TO ENABLE LIVE TRADING
+# Set these environment variables or modify directly:
+POLYMARKET_PRIVATE_KEY = os.getenv("POLYMARKET_PRIVATE_KEY", "")  # Your private key
+POLYMARKET_PROXY_ADDRESS = os.getenv("POLYMARKET_PROXY_ADDRESS", "")  # Your proxy wallet address
+POLYMARKET_CHAIN_ID = 137  # Polygon mainnet
+PROBABILITY_DELTA_DEADZONE_THRESHOLD = 3.0 # If abs(delta) is less than this, close positions
+BANKROLL_USAGE_FRACTION = 0.7 # Fraction of total bankroll to use for sizing
+# TOTAL_BANKROLL_USD = 100.0 # No longer needed, will be fetched dynamically
+ORDER_SIZE_USD = 4.0  # Deprecated in favor of dynamic sizing
+
+# Make sure trading is disabled if the client is not available
+if not POLYMARKET_AVAILABLE:
+    TRADING_ENABLED = False
+
+# Initialize Polymarket client
+polymarket_client = None
+if POLYMARKET_AVAILABLE and TRADING_ENABLED and POLYMARKET_PRIVATE_KEY and POLYMARKET_PROXY_ADDRESS:
+    try:
+        polymarket_client = ClobClient(
+            host=CLOB_API_URL,
+            key=POLYMARKET_PRIVATE_KEY,
+            chain_id=POLYMARKET_CHAIN_ID,
+            signature_type=1,  # For email/magic accounts, use 2 for browser wallets
+            funder=POLYMARKET_PROXY_ADDRESS
+        )
+        polymarket_client.set_api_creds(polymarket_client.create_or_derive_api_creds())
+        print("Polymarket client initialized successfully for XRP")
+    except Exception as e:
+        print(f"Failed to initialize Polymarket client for XRP: {e}")
+        polymarket_client = None
+elif POLYMARKET_AVAILABLE:
+    if TRADING_ENABLED:
+        print("Polymarket credentials not provided for XRP. Set POLYMARKET_PRIVATE_KEY and POLYMARKET_PROXY_ADDRESS environment variables to enable order placement.")
+else:
+    print("Polymarket functionality disabled for XRP.")
 
 # Load the LightGBM model once when the script starts
 try:
@@ -24,6 +71,63 @@ except Exception as e:
     print(f"Error loading model file '{MODEL_FILE}': {e}")
     print("Predictions will be disabled.")
     model = None
+
+def place_order(side, token_id, price, size_usd):
+    """
+    Places a BUY or SELL order on Polymarket.
+    
+    Args:
+        side (str): "BUY" or "SELL"
+        token_id (str): The token ID for the order.
+        price (float): The price for the order (0-1 range).
+        size_usd (float): Order size in USD.
+    
+    Returns:
+        bool: True if order placed successfully, False otherwise
+    """
+    print(f"  --> Attempting to place order: {side} ${size_usd:.2f} of token {token_id} at price {price:.2f}")
+    if not polymarket_client:
+        print("  --> Polymarket client not available")
+        return False
+    
+    if size_usd <= 0.1: # Minimum order size to avoid dust
+        print(f"  --> Order size ${size_usd:.2f} too small, skipping.")
+        return True # Return true to not halt any batch processing
+
+    try:
+        # Calculate order size in shares
+        order_price = round(price, 2)
+        if order_price <= 0:
+            print(f"  --> Invalid order price: {order_price}")
+            return False
+            
+        size_shares = size_usd / order_price
+
+        # Create order with a 2-minute expiration
+        expiration = int((datetime.now(UTC) + timedelta(minutes=2)).timestamp())
+        
+        order_args = OrderArgs(
+            price=order_price,
+            size=size_shares,
+            side=side,
+            token_id=token_id,
+            expiration=expiration
+        )
+        
+        signed_order = polymarket_client.create_order(order_args)
+        
+        response = polymarket_client.post_order(signed_order, OrderType.GTD)
+        
+        if response.get('success', False):
+            print(f"  --> ✅ Order placed: {side} {size_shares:.2f} shares of token {token_id} at ${order_price:.2f} (${size_usd:.2f} total)")
+            return True
+        else:
+            print(f"  --> ❌ Order failed: {response.get('errorMsg', 'Unknown error')}")
+            return False
+            
+    except Exception as e:
+        print(f"  --> Error placing order: {e}")
+        return False
 
 def get_p_start_from_binance(hour_start_utc):
     """
@@ -617,6 +721,26 @@ def collect_data_once():
             conn.commit()
             conn.close()
 
+            # --- Order Placement Logic ---
+            if TRADING_ENABLED:
+                if p_up_prediction is not None and best_bid_price is not None and best_ask_price is not None:
+                    # Midpoint price of the YES token is our best estimate of the current market probability
+                    price_yes = (best_bid_price + best_ask_price) / 2
+                    
+                    # Price of the NO token is inverse of the YES token
+                    price_no = 1 - price_yes
+                    
+                    # Calculate delta in percentage points
+                    delta = (p_up_prediction - price_yes) * 100
+                    
+                    print(f"Prediction={p_up_prediction:.4f}, Market Price={price_yes:.4f}, Delta={delta:.2f}% for XRP")
+                    
+                    # Manage positions based on the calculated delta
+                    manage_positions(delta, token_id_yes, token_id_no, price_yes, price_no)
+            else:
+                print("Trading is disabled for XRP.")
+            # --- End Order Placement Logic ---
+
             t3 = datetime.now(UTC)
             xrp_price_str = f"{xrp_price:.2f}" if xrp_price is not None else "N/A"
             ofi_str = f"{ofi:.4f}" if ofi is not None else "N/A"
@@ -628,7 +752,124 @@ def collect_data_once():
             print(f"({datetime.now(UTC).strftime('%H:%M:%S.%f')}) Could not retrieve valid order book for '{market_name}'")
 
     except Exception as e:
-        print(f"An unexpected error occurred during data collection: {e}")
+        print(f"An unexpected error occurred during data collection for XRP: {e}")
+
+def get_user_state(token_id_yes, token_id_no):
+    """Fetches user's USDC balance and positions in the given market."""
+    if not polymarket_client:
+        return None, None, None
+    try:
+        usdc_balance = polymarket_client.get_user_usdc_balance()
+        positions = polymarket_client.get_user_positions()
+        
+        position_yes = 0.0
+        position_no = 0.0
+
+        for p in positions:
+            if p["token_id"] == token_id_yes:
+                position_yes = float(p["quantity"])
+            elif p["token_id"] == token_id_no:
+                position_no = float(p["quantity"])
+
+        return usdc_balance, position_yes, position_no
+    except Exception as e:
+        print(f"Error getting user state: {e}")
+        return None, None, None
+
+def calculate_position_value(token_id, position_shares):
+    """Calculates the current market value of a position."""
+    if position_shares == 0:
+        return 0.0
+    
+    try:
+        best_bid, best_ask = get_order_book(token_id)
+        if best_bid and best_ask:
+            # We can sell at the best bid price
+            return position_shares * best_bid[0]
+        return 0.0
+    except Exception as e:
+        print(f"Could not calculate position value for token {token_id}: {e}")
+        return 0.0
+
+def manage_positions(delta, token_id_yes, token_id_no, price_yes, price_no):
+    """
+    Adjusts user's position to match the target size based on delta.
+    - Sells positions if delta is in the dead zone.
+    - Adjusts UP/DOWN positions based on delta magnitude and sign.
+    """
+    print("\n--- Position Management (XRP) ---")
+    if not polymarket_client:
+        print("-> Trading disabled, skipping position management.")
+        return
+
+    usdc_balance, position_yes, position_no = get_user_state(token_id_yes, token_id_no)
+
+    if usdc_balance is None:
+        print("-> Could not retrieve user balance, aborting position management.")
+        return
+
+    print(f"-> State: YES shares={position_yes:.4f}, NO shares={position_no:.4f}, USDC=${usdc_balance:.2f}")
+    
+    # Value of current holdings
+    value_yes = calculate_position_value(token_id_yes, position_yes)
+    value_no = calculate_position_value(token_id_no, position_no)
+    
+    print(f"-> Value: YES=${value_yes:.2f}, NO=${value_no:.2f}")
+
+    # Dynamically calculate total bankroll
+    total_bankroll = usdc_balance + value_yes + value_no
+    print(f"-> Total Bankroll (USDC + Positions) = ${total_bankroll:.2f}")
+
+    # --- Target Calculation ---
+    print("-> Calculating Target...")
+    target_value = 0
+    target_direction = None
+
+    if abs(delta) < PROBABILITY_DELTA_DEADZONE_THRESHOLD:
+        print(f"-> Verdict: Delta |{delta:.2f}| is within dead zone (< {PROBABILITY_DELTA_DEADZONE_THRESHOLD}). Goal is to close all positions.")
+        target_value = 0
+    else:
+        target_value = (abs(delta) / 100.0) * total_bankroll * BANKROLL_USAGE_FRACTION
+        target_direction = "UP" if delta > 0 else "DOWN"
+        print(f"-> Verdict: Target is a {target_direction} position of ${target_value:.2f}")
+
+    # --- Position Adjustment ---
+    print("-> Adjusting Positions...")
+    # 1. Close unwanted positions first
+    if target_direction != "UP" and position_yes > 0:
+        print(f"-> Action: Target is not UP. Closing YES position of {position_yes:.4f} shares (value ${value_yes:.2f}).")
+        place_order(SELL, token_id_yes, price_yes, value_yes)
+    
+    if target_direction != "DOWN" and position_no > 0:
+        print(f"-> Action: Target is not DOWN. Closing NO position of {position_no:.4f} shares (value ${value_no:.2f}).")
+        place_order(SELL, token_id_no, price_no, value_no)
+
+    # 2. Adjust target position
+    if target_direction == "UP":
+        adjustment_usd = target_value - value_yes
+        print(f"-> UP Adjustment: Target=${target_value:.2f}, Current=${value_yes:.2f}, Diff=${adjustment_usd:.2f}")
+        if adjustment_usd > 0.1: # Threshold to avoid tiny orders
+            print(f"-> Action: BUY ${adjustment_usd:.2f} of YES token.")
+            place_order(BUY, token_id_yes, price_yes, adjustment_usd)
+        elif adjustment_usd < -0.1: # Threshold to avoid tiny orders
+            print(f"-> Action: SELL ${abs(adjustment_usd):.2f} of YES token.")
+            place_order(SELL, token_id_yes, price_yes, abs(adjustment_usd))
+        else:
+            print("-> Action: No significant adjustment needed for UP position.")
+
+    elif target_direction == "DOWN":
+        adjustment_usd = target_value - value_no
+        print(f"-> DOWN Adjustment: Target=${target_value:.2f}, Current=${value_no:.2f}, Diff=${adjustment_usd:.2f}")
+        if adjustment_usd > 0.1: # Threshold to avoid tiny orders
+            print(f"-> Action: BUY ${adjustment_usd:.2f} of NO token.")
+            place_order(BUY, token_id_no, price_no, adjustment_usd)
+        elif adjustment_usd < -0.1:
+            print(f"-> Action: SELL ${abs(adjustment_usd):.2f} of NO token.")
+            place_order(SELL, token_id_no, price_no, abs(adjustment_usd))
+        else:
+            print("-> Action: No significant adjustment needed for DOWN position.")
+            
+    print("--- End Position Management (XRP) ---")
 
 if __name__ == "__main__":
     import argparse
