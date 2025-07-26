@@ -18,6 +18,7 @@ try:
         OrderType,
         BalanceAllowanceParams,
         AssetType,
+        TradeParams,
     )
     from py_clob_client.order_builder.constants import BUY, SELL
     POLYMARKET_AVAILABLE = True
@@ -804,6 +805,7 @@ def collect_data_once():
     except Exception as e:
         print(f"An unexpected error occurred during data collection for ETH: {e}")
 
+
 def get_user_state(token_id_yes, token_id_no):
     """Fetches user's USDC balance and positions in the given market."""
     if not polymarket_client:
@@ -817,23 +819,30 @@ def get_user_state(token_id_yes, token_id_no):
         # The balance is returned in the smallest unit (6 decimals), so we divide by 1,000,000
         usdc_balance = float(account_info["balance"]) / 1_000_000.0
         
-        # Use the correct get_orders() method to fetch open orders
-        orders = polymarket_client.get_orders()
-        
+        # Calculate net position from all historical trades for each token
         position_yes = 0.0
-        position_no = 0.0
+        trades_yes = polymarket_client.get_trades(TradeParams(asset_id=token_id_yes))
+        for trade in trades_yes:
+            size = float(trade.get("size", 0.0))
+            if trade.get("side") == "buy":
+                position_yes += size
+            elif trade.get("side") == "sell":
+                position_yes -= size
 
-        for p in orders:
-            # The order object uses 'asset_id' for the token and 'order_size' for the quantity
-            if p.get("asset_id") == token_id_yes:
-                position_yes += float(p.get("order_size", 0.0))
-            elif p.get("asset_id") == token_id_no:
-                position_no += float(p.get("order_size", 0.0))
+        position_no = 0.0
+        trades_no = polymarket_client.get_trades(TradeParams(asset_id=token_id_no))
+        for trade in trades_no:
+            size = float(trade.get("size", 0.0))
+            if trade.get("side") == "buy":
+                position_no += size
+            elif trade.get("side") == "sell":
+                position_no -= size
 
         return usdc_balance, position_yes, position_no
     except Exception as e:
         print(f"Error getting user state: {e}")
         return None, None, None
+
 
 def calculate_position_value(token_id, position_shares):
     """Calculates the current market value of a position."""
