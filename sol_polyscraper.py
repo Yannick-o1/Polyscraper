@@ -24,7 +24,7 @@ except ImportError:
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CLOB_API_URL = "https://clob.polymarket.com"
 MARKETS_CSV_FILE = os.path.join(BASE_DIR, "sol_polymarkets.csv")
-DB_FILE = os.path.join(BASE_DIR, "polyscraper.db")
+DB_FILE = os.path.join(BASE_DIR, "sol_polyscraper.db")
 MODEL_FILE = os.path.join(BASE_DIR, "sol_lgbm.txt")
 
 # --- Polymarket Configuration ---
