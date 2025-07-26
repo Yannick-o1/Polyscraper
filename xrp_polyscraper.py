@@ -778,16 +778,18 @@ def get_user_state(token_id_yes, token_id_no):
         account_info = polymarket_client.get_balance_allowance(balance_params)
         usdc_balance = float(account_info["balance"])
         
-        positions = polymarket_client.get_user_positions()
+        # Use the correct get_orders() method to fetch open orders
+        orders = polymarket_client.get_orders()
         
         position_yes = 0.0
         position_no = 0.0
 
-        for p in positions:
+        for p in orders:
             if p["token_id"] == token_id_yes:
-                position_yes = float(p["quantity"])
+                # Assuming 'size' is the key for the number of shares
+                position_yes += float(p["size"])
             elif p["token_id"] == token_id_no:
-                position_no = float(p["quantity"])
+                position_no += float(p["size"])
 
         return usdc_balance, position_yes, position_no
     except Exception as e:
