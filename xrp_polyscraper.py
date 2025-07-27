@@ -912,22 +912,18 @@ def manage_positions(delta, token_id_yes, token_id_no, price_yes, price_no):
     if abs(adjustment_shares_yes) < 0.1:
         print(f"      YES: No adjustment needed.")
     elif adjustment_shares_yes > 0.1: # Buy YES
-        buy_price = min(0.99, price_yes + 0.01)
-        place_order(BUY, token_id_yes, buy_price, adjustment_shares_yes)
+        place_order(BUY, token_id_yes, price_yes, adjustment_shares_yes)
     elif adjustment_shares_yes < -0.1: # Sell YES
-        sell_price = max(0.01, price_yes - 0.01)
-        place_order(SELL, token_id_yes, sell_price, abs(adjustment_shares_yes))
+        place_order(SELL, token_id_yes, price_yes, abs(adjustment_shares_yes))
     
     # 2. Adjust NO position
     adjustment_shares_no = target_shares_no - position_no
     if abs(adjustment_shares_no) < 0.1:
         print(f"      NO: No adjustment needed.")
     elif adjustment_shares_no > 0.1: # Buy NO
-        buy_price = min(0.99, price_no + 0.01)
-        place_order(BUY, token_id_no, buy_price, adjustment_shares_no)
+        place_order(BUY, token_id_no, price_no, adjustment_shares_no)
     elif adjustment_shares_no < -0.1: # Sell NO
-        sell_price = max(0.01, price_no - 0.01)
-        place_order(SELL, token_id_no, sell_price, abs(adjustment_shares_no))
+        place_order(SELL, token_id_no, price_no, abs(adjustment_shares_no))
             
     print("--- End Position Management (XRP) ---")
 
