@@ -315,7 +315,7 @@ def calculate_live_prediction(historical_df, current_timestamp, current_ofi, p_s
         df['lret'] = np.log(df['sol_usdt_spot']).diff()
         
         # Use a rolling window of 20 periods (minutes) for std deviation
-        rolling_vol = df['lret'].rolling(window=20, min_periods=20).std()
+        rolling_vol = df['lret'].rolling(window=20, min_periods=2).std()
         
         # Get the most recent volatility value and scale it to the hour
         vol = rolling_vol.iloc[-1] * np.sqrt(60) if not rolling_vol.empty else 0.0
@@ -756,6 +756,27 @@ def collect_data_once():
             best_bid_price = best_bid[0]
             best_ask_price = best_ask[0]
 
+            # --- Order Placement Logic (PRIORITIZED FOR EFFICIENCY) ---
+            if TRADING_ENABLED:
+                if p_up_prediction is not None and best_bid_price is not None and best_ask_price is not None:
+                    # Midpoint price of the YES token is our best estimate of the current market probability
+                    price_yes = (best_bid_price + best_ask_price) / 2
+                    
+                    # Price of the NO token is inverse of the YES token
+                    price_no = 1 - price_yes
+                    
+                    # Calculate delta in percentage points
+                    delta = (p_up_prediction - price_yes) * 100
+                    
+                    print(f"Prediction={p_up_prediction:.4f}, Market Price={price_yes:.4f}, Delta={delta:.2f}% for SOL")
+                    
+                    # Manage positions based on the calculated delta
+                    manage_positions(delta, token_id_yes, token_id_no, price_yes, price_no)
+            else:
+                print("Trading is disabled for SOL.")
+            # --- End Order Placement Logic ---
+
+            # --- Database Logging (de-prioritized) ---
             data_row = {
                 'timestamp': t0.strftime('%Y-%m-%d %H:%M:%S'),
                 'market_name': market_name,
@@ -776,26 +797,6 @@ def collect_data_once():
             ''', data_row)
             conn.commit()
             conn.close()
-
-            # --- Order Placement Logic ---
-            if TRADING_ENABLED:
-                if p_up_prediction is not None and best_bid_price is not None and best_ask_price is not None:
-                    # Midpoint price of the YES token is our best estimate of the current market probability
-                    price_yes = (best_bid_price + best_ask_price) / 2
-                    
-                    # Price of the NO token is inverse of the YES token
-                    price_no = 1 - price_yes
-                    
-                    # Calculate delta in percentage points
-                    delta = (p_up_prediction - price_yes) * 100
-                    
-                    print(f"Prediction={p_up_prediction:.4f}, Market Price={price_yes:.4f}, Delta={delta:.2f}% for SOL")
-                    
-                    # Manage positions based on the calculated delta
-                    manage_positions(delta, token_id_yes, token_id_no, price_yes, price_no)
-            else:
-                print("Trading is disabled for SOL.")
-            # --- End Order Placement Logic ---
 
             t3 = datetime.now(UTC)
             sol_price_str = f"{sol_price:.2f}" if sol_price is not None else "N/A"
@@ -925,17 +926,21 @@ def manage_positions(delta, token_id_yes, token_id_no, price_yes, price_no):
     adjustment_shares_yes = target_shares_yes - position_yes
     print(f"-> YES adjustment: Have {position_yes:.4f}, want {target_shares_yes:.4f}, diff={adjustment_shares_yes:.4f}")
     if adjustment_shares_yes > 0.1: # Buy YES
-        place_order(BUY, token_id_yes, price_yes, adjustment_shares_yes)
+        buy_price = min(0.99, price_yes + 0.01)
+        place_order(BUY, token_id_yes, buy_price, adjustment_shares_yes)
     elif adjustment_shares_yes < -0.1: # Sell YES
-        place_order(SELL, token_id_yes, price_yes, abs(adjustment_shares_yes))
+        sell_price = max(0.01, price_yes - 0.01)
+        place_order(SELL, token_id_yes, sell_price, abs(adjustment_shares_yes))
     
     # 2. Adjust NO position
     adjustment_shares_no = target_shares_no - position_no
     print(f"-> NO adjustment: Have {position_no:.4f}, want {target_shares_no:.4f}, diff={adjustment_shares_no:.4f}")
     if adjustment_shares_no > 0.1: # Buy NO
-        place_order(BUY, token_id_no, price_no, adjustment_shares_no)
+        buy_price = min(0.99, price_no + 0.01)
+        place_order(BUY, token_id_no, buy_price, adjustment_shares_no)
     elif adjustment_shares_no < -0.1: # Sell NO
-        place_order(SELL, token_id_no, price_no, abs(adjustment_shares_no))
+        sell_price = max(0.01, price_no - 0.01)
+        place_order(SELL, token_id_no, sell_price, abs(adjustment_shares_no))
             
     print("--- End Position Management (SOL) ---")
 
