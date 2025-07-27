@@ -714,6 +714,18 @@ def collect_data_once():
         print(f"[{t0.strftime('%Y-%m-%d %H:%M:%S')}] | {asset_name}USDT | Polyscraper Run")
         print("="*80)
 
+        token_id_yes, token_id_no, market_name = get_current_market_token_ids()
+
+        if not token_id_yes:
+            print(f"  [INFO] No active market found for the current hour.")
+            return
+
+        print(f"\n  [INFO] Market: '{market_name}'")
+
+        best_bid, best_ask = get_order_book(token_id_yes)
+        t1 = datetime.now(UTC)
+        print(f"  [INFO] Fetched Order Book in {(t1-t0).total_seconds():.4f}s")
+        
         # Fetch the SOL spot price and OFI from Binance first
         sol_price, ofi = get_binance_data_and_ofi()
         
@@ -740,21 +752,6 @@ def collect_data_once():
             
             p_up_prediction = calculate_live_prediction(historical_df, t0, ofi, p_start, sol_price)
         # --- End Prediction Logic ---
-
-        token_id_yes, token_id_no, market_name = get_current_market_token_ids()
-
-        t1 = datetime.now(UTC)
-
-        if not token_id_yes:
-            print(f"  [INFO] No active market found for the current hour.")
-            return
-
-        print(f"\n  [INFO] Market: '{market_name}'")
-
-        best_bid, best_ask = get_order_book(token_id_yes)
-
-        t2 = datetime.now(UTC)
-        print(f"  [INFO] Fetched Order Book in {(t2-t1).total_seconds():.4f}s")
 
         if best_bid and best_ask:
             best_bid_price = best_bid[0]
