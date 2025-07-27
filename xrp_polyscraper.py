@@ -738,7 +738,7 @@ def collect_data_once():
                     print(f"  [PREDICT] Prediction: {prediction_pct:.2f}% | Market: {market_pct:.2f}% | Delta: {delta:.2f} pp")
                     
                     # Manage positions based on the calculated delta
-                    manage_positions(delta, token_id_yes, token_id_no, price_yes, price_no)
+                    manage_positions(delta, token_id_yes, token_id_no, price_yes, price_no, best_bid_price, best_ask_price)
             else:
                 print("\n  [TRADE] Trading is disabled for XRP.")
             # --- End Order Placement Logic ---
@@ -854,7 +854,7 @@ def calculate_position_value(token_id, position_shares):
         print(f"Could not calculate position value for token {token_id}: {e}")
         return 0.0
 
-def manage_positions(delta, token_id_yes, token_id_no, price_yes, price_no):
+def manage_positions(delta, token_id_yes, token_id_no, price_yes, price_no, best_bid_yes, best_ask_yes):
     """
     Adjusts user's position to match the target size based on delta.
     - Sells positions if delta is in the dead zone.
@@ -912,18 +912,26 @@ def manage_positions(delta, token_id_yes, token_id_no, price_yes, price_no):
     if abs(adjustment_shares_yes) < 0.1:
         print(f"      YES: No adjustment needed.")
     elif adjustment_shares_yes > 0.1: # Buy YES
-        place_order(BUY, token_id_yes, price_yes, adjustment_shares_yes)
+        buy_price = min(0.99, best_bid_yes + 0.01)
+        place_order(BUY, token_id_yes, buy_price, adjustment_shares_yes)
     elif adjustment_shares_yes < -0.1: # Sell YES
-        place_order(SELL, token_id_yes, price_yes, abs(adjustment_shares_yes))
+        sell_price = max(0.01, best_ask_yes - 0.01)
+        place_order(SELL, token_id_yes, sell_price, abs(adjustment_shares_yes))
     
     # 2. Adjust NO position
     adjustment_shares_no = target_shares_no - position_no
     if abs(adjustment_shares_no) < 0.1:
         print(f"      NO: No adjustment needed.")
     elif adjustment_shares_no > 0.1: # Buy NO
-        place_order(BUY, token_id_no, price_no, adjustment_shares_no)
+        # To buy NO, we place an order 1 point above the best bid for NO tokens.
+        # The best bid for NO is (1 - best ask for YES).
+        buy_price = min(0.99, (1 - best_ask_yes) + 0.01)
+        place_order(BUY, token_id_no, buy_price, adjustment_shares_no)
     elif adjustment_shares_no < -0.1: # Sell NO
-        place_order(SELL, token_id_no, price_no, abs(adjustment_shares_no))
+        # To sell NO, we place an order 1 point below the best ask for NO tokens.
+        # The best ask for NO is (1 - best bid for YES).
+        sell_price = max(0.01, (1 - best_bid_yes) - 0.01)
+        place_order(SELL, token_id_no, sell_price, abs(adjustment_shares_no))
             
     print("--- End Position Management (XRP) ---")
 
