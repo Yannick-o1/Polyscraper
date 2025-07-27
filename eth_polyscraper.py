@@ -97,20 +97,20 @@ def place_order(side, token_id, price, size_shares):
     """
     order_price = round(price, 2)
     size_usd = size_shares * order_price
-    print(f"  --> Attempting to place order: {side} {size_shares:.2f} shares of token {token_id} at price {order_price:.2f} (${size_usd:.2f} total)")
+    print(f"  [TRADE] => Placing Order: {side} {size_shares:.2f} shares @ ${order_price:.2f} (${size_usd:.2f} total)")
     
     if not polymarket_client:
-        print("  --> Polymarket client not available")
+        print("      -> Client not available.")
         return False
     
     if size_shares < 0.1: # Minimum share amount to avoid dust
-        print(f"  --> Order size {size_shares:.2f} shares too small, skipping.")
+        print(f"      -> SKIPPED: Order size {size_shares:.2f} shares too small.")
         return True # Return true to not halt any batch processing
 
     try:
         # Check against the minimum share size required by the API
         if size_shares < MINIMUM_ORDER_SIZE_SHARES:
-            print(f"  --> Order size of {size_shares:.2f} shares is below the minimum of {MINIMUM_ORDER_SIZE_SHARES}, skipping.")
+            print(f"      -> ❌ SKIPPED: Order size of {size_shares:.2f} shares is below the minimum of {MINIMUM_ORDER_SIZE_SHARES}.")
             return True
 
         # Create order with a 2-minute expiration
@@ -129,14 +129,14 @@ def place_order(side, token_id, price, size_shares):
         response = polymarket_client.post_order(signed_order, OrderType.GTD)
         
         if response.get('success', False):
-            print(f"  --> ✅ Order placed: {side} {size_shares:.2f} shares of token {token_id} at ${order_price:.2f} (${size_usd:.2f} total)")
+            print(f"      -> ✅ SUCCESS: Order placed.")
             return True
         else:
-            print(f"  --> ❌ Order failed: {response.get('errorMsg', 'Unknown error')}")
+            print(f"      -> ❌ FAILED: {response.get('errorMsg', 'Unknown error')}")
             return False
             
     except Exception as e:
-        print(f"  --> Error placing order: {e}")
+        print(f"      -> ❌ ERROR placing order: {e}")
         return False
 
 def get_p_start_from_binance(hour_start_utc):
@@ -328,10 +328,10 @@ def calculate_live_prediction(historical_df, current_timestamp, current_ofi, p_s
         ofi = current_ofi if current_ofi is not None else 0.0
         
         # --- Diagnostic Logging ---
-        print("--- Prediction Feature Calculation ---")
-        print(f"p_start: {p_start}, current_price: {current_price}")
-        print(f"r: {r:.6f}, tau: {tau:.4f}, vol: {vol:.6f}, ofi: {ofi:.4f}")
-        print(f"r_scaled: {r_scaled:.6f}")
+        print(f"\n  [PREDICT] Features:")
+        print(f"      Spot: {current_price:<12.2f} | p_start: {p_start:<12.2f}")
+        print(f"      r: {r:<10.6f} | tau: {tau:<7.4f} | vol: {vol:<10.6f} | ofi: {ofi:<7.4f}")
+        print(f"      r_scaled: {r_scaled:<10.6f}")
         # --- End Diagnostic Logging ---
 
         if pd.isna([r_scaled, tau, vol, ofi]).any():
@@ -709,8 +709,11 @@ def collect_data_once():
     
     try:
         t0 = datetime.now(UTC)
-        print(f"({t0.strftime('%H:%M:%S.%f')}) --- Starting run for ETH ---")
-        
+        asset_name = "ETH"
+        print("\n" + "="*80)
+        print(f"[{t0.strftime('%Y-%m-%d %H:%M:%S')}] | {asset_name}USDT | Polyscraper Run")
+        print("="*80)
+
         # Fetch the ETH spot price and OFI from Binance first
         eth_price, ofi = get_binance_data_and_ofi()
         
@@ -741,16 +744,17 @@ def collect_data_once():
         token_id_yes, token_id_no, market_name = get_current_market_token_ids()
 
         t1 = datetime.now(UTC)
-        print(f"({t1.strftime('%H:%M:%S.%f')}) Found token IDs. Elapsed: {(t1-t0).total_seconds():.4f}s")
 
         if not token_id_yes:
-            print(f"({datetime.now(UTC).strftime('%H:%M:%S.%f')}) No active market found for the current hour.")
+            print(f"  [INFO] No active market found for the current hour.")
             return
+
+        print(f"\n  [INFO] Market: '{market_name}'")
 
         best_bid, best_ask = get_order_book(token_id_yes)
 
         t2 = datetime.now(UTC)
-        print(f"({t2.strftime('%H:%M:%S.%f')}) Got order book. API call took: {(t2-t1).total_seconds():.4f}s")
+        print(f"  [INFO] Fetched Order Book in {(t2-t1).total_seconds():.4f}s")
 
         if best_bid and best_ask:
             best_bid_price = best_bid[0]
@@ -768,12 +772,14 @@ def collect_data_once():
                     # Calculate delta in percentage points
                     delta = (p_up_prediction - price_yes) * 100
                     
-                    print(f"Prediction={p_up_prediction:.4f}, Market Price={price_yes:.4f}, Delta={delta:.2f}% for ETH")
+                    prediction_pct = p_up_prediction * 100
+                    market_pct = price_yes * 100
+                    print(f"  [PREDICT] Prediction: {prediction_pct:.2f}% | Market: {market_pct:.2f}% | Delta: {delta:.2f} pp")
                     
                     # Manage positions based on the calculated delta
                     manage_positions(delta, token_id_yes, token_id_no, price_yes, price_no)
             else:
-                print("Trading is disabled for ETH.")
+                print("\n  [TRADE] Trading is disabled for ETH.")
             # --- End Order Placement Logic ---
 
             # --- Database Logging (de-prioritized) ---
@@ -798,15 +804,15 @@ def collect_data_once():
             conn.commit()
             conn.close()
 
+
             t3 = datetime.now(UTC)
             eth_price_str = f"{eth_price:.2f}" if eth_price is not None else "N/A"
-            ofi_str = f"{ofi:.4f}" if ofi is not None else "N/A"
             prediction_str = f"{p_up_prediction:.4f}" if p_up_prediction is not None else "N/A"
-            print(f"({t3.strftime('%H:%M:%S.%f')}) Logged to DB: ETH={eth_price_str}, OFI={ofi_str}, P(Up)={prediction_str}, Bid={best_bid_price:.2f}, Ask={best_ask_price:.2f} for '{market_name}'")
-            print(f"({t3.strftime('%H:%M:%S.%f')}) --- Total run time: {(t3-t0).total_seconds():.4f}s ---")
+            print(f"\n  [LOG]   DB record created for {asset_name}={eth_price_str}, P(Up)={prediction_str}, Bid={best_bid_price:.2f}, Ask={best_ask_price:.2f}")
+            print(f"  [END]   Run finished in {(t3-t0).total_seconds():.4f}s.\n")
 
         else:
-            print(f"({datetime.now(UTC).strftime('%H:%M:%S.%f')}) Could not retrieve valid order book for '{market_name}'")
+            print(f"  [INFO] Could not retrieve valid order book for '{market_name}'")
 
     except Exception as e:
         print(f"An unexpected error occurred during data collection for ETH: {e}")
@@ -905,7 +911,8 @@ def manage_positions(delta, token_id_yes, token_id_no, price_yes, price_no):
         print("-> Could not retrieve full user state (balance or positions). Aborting position management.")
         return
 
-    print(f"-> State: YES shares={position_yes:.4f}, NO shares={position_no:.4f}, USDC=${usdc_balance:.2f}")
+    print(f"\n  [TRADE] Current State:")
+    print(f"      YES: {position_yes:<8.4f} shares | NO: {position_no:<8.4f} shares | USDC: ${usdc_balance:<.2f}")
     
     # Value of current holdings for bankroll calculation (liquidatable value at bid)
     value_yes_liquidatable = calculate_position_value(token_id_yes, position_yes)
@@ -913,20 +920,20 @@ def manage_positions(delta, token_id_yes, token_id_no, price_yes, price_no):
     
     # Dynamically calculate total bankroll using conservative liquidatable value
     total_bankroll = usdc_balance + value_yes_liquidatable + value_no_liquidatable
-    print(f"-> Total Bankroll (USDC + Positions) = ${total_bankroll:.2f}")
+    print(f"      Bankroll: ${total_bankroll:.2f}")
 
     # --- Target Calculation (in Shares) ---
-    print("-> Calculating Target...")
+    print(f"\n  [TRADE] Target Calculation:")
     target_shares_yes = 0.0
     target_shares_no = 0.0
 
     if abs(delta) < PROBABILITY_DELTA_DEADZONE_THRESHOLD:
-        print(f"-> Verdict: Delta |{delta:.2f}| is within dead zone (< {PROBABILITY_DELTA_DEADZONE_THRESHOLD}). Goal is to close all positions.")
+        print(f"      -> Verdict: Delta |{delta:.2f}| is within dead zone. Goal is to close all positions.")
         # Target shares are 0 for both YES and NO.
     else:
         target_value_usd = (abs(delta) / 100.0) * total_bankroll * BANKROLL_USAGE_FRACTION
         target_direction = "UP" if delta > 0 else "DOWN"
-        print(f"-> Verdict: Target is a {target_direction} position of ${target_value_usd:.2f}")
+        print(f"      -> Verdict: Target {target_direction} position of ${target_value_usd:.2f}")
 
         if target_direction == "UP":
             if price_yes > 0:
@@ -935,15 +942,16 @@ def manage_positions(delta, token_id_yes, token_id_no, price_yes, price_no):
             if price_no > 0:
                 target_shares_no = target_value_usd / price_no
     
-    print(f"-> Target Shares: YES={target_shares_yes:.4f}, NO={target_shares_no:.4f}")
+    print(f"      Target Shares -> YES: {target_shares_yes:.4f} | NO: {target_shares_no:.4f}")
 
     # --- Position Adjustment (in Shares) ---
-    print("-> Adjusting Positions...")
+    print(f"\n  [TRADE] Position Adjustment:")
 
     # 1. Adjust YES position
     adjustment_shares_yes = target_shares_yes - position_yes
-    print(f"-> YES adjustment: Have {position_yes:.4f}, want {target_shares_yes:.4f}, diff={adjustment_shares_yes:.4f}")
-    if adjustment_shares_yes > 0.1: # Buy YES
+    if abs(adjustment_shares_yes) < 0.1:
+        print(f"      YES: No adjustment needed.")
+    elif adjustment_shares_yes > 0.1: # Buy YES
         buy_price = min(0.99, price_yes + 0.01)
         place_order(BUY, token_id_yes, buy_price, adjustment_shares_yes)
     elif adjustment_shares_yes < -0.1: # Sell YES
@@ -952,8 +960,9 @@ def manage_positions(delta, token_id_yes, token_id_no, price_yes, price_no):
     
     # 2. Adjust NO position
     adjustment_shares_no = target_shares_no - position_no
-    print(f"-> NO adjustment: Have {position_no:.4f}, want {target_shares_no:.4f}, diff={adjustment_shares_no:.4f}")
-    if adjustment_shares_no > 0.1: # Buy NO
+    if abs(adjustment_shares_no) < 0.1:
+        print(f"      NO: No adjustment needed.")
+    elif adjustment_shares_no > 0.1: # Buy NO
         buy_price = min(0.99, price_no + 0.01)
         place_order(BUY, token_id_no, buy_price, adjustment_shares_no)
     elif adjustment_shares_no < -0.1: # Sell NO
