@@ -1,0 +1,19 @@
+[Unit]
+Description=Polymarket Continuous Trading Bot
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Polyscraper
+ExecStart=/home/ubuntu/Polyscraper/run_continuous_trading.sh
+Restart=always
+RestartSec=10
+Environment=POLYMARKET_PRIVATE_KEY=0xcf71f00a307e65f37e1c7a9111d2822b869b6fa04b78df8833c1e565e37089eb
+Environment=POLYMARKET_PROXY_ADDRESS=0x5423dc7f4beb8c8cf99c1c091ed4717cedc58b45
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target 
