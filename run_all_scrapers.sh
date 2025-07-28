@@ -21,10 +21,11 @@ echo "--- cron job started at $(date) ---" >> "$DIR/run_all_scrapers.log" 2>&1
 
 # --- Run Scrapers ---
 # The output of each script (both standard output and errors) is appended to a log file.
-$PYTHON_EXEC "$DIR/polyscraper.py" --run-once >> "$DIR/btc.log" 2>&1
-$PYTHON_EXEC "$DIR/sol_polyscraper.py" --run-once >> "$DIR/sol.log" 2>&1
-$PYTHON_EXEC "$DIR/xrp_polyscraper.py" --run-once >> "$DIR/xrp.log" 2>&1
-$PYTHON_EXEC "$DIR/eth_polyscraper.py" --run-once >> "$DIR/eth.log" 2>&1
+# Updated to use the consolidated polytrader.py with currency arguments
+$PYTHON_EXEC "$DIR/polytrader.py" btc --run-once >> "$DIR/btc.log" 2>&1
+$PYTHON_EXEC "$DIR/polytrader.py" sol --run-once >> "$DIR/sol.log" 2>&1
+$PYTHON_EXEC "$DIR/polytrader.py" xrp --run-once >> "$DIR/xrp.log" 2>&1
+$PYTHON_EXEC "$DIR/polytrader.py" eth --run-once >> "$DIR/eth.log" 2>&1
 
 # Log the end of the script
 echo "--- cron job finished at $(date) ---" >> "$DIR/run_all_scrapers.log" 2>&1 
