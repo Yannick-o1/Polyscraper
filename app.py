@@ -19,25 +19,25 @@ def format_price(value, decimals):
 CURRENCIES = {
     'btc': {
         'name': 'Bitcoin',
-        'scraper_script': 'polytrader.py',
+        'scraper_script': 'polytrader_continuous.py',
         'db_file': 'btc_polyscraper.db',
         'spot_decimals': 2
     },
     'sol': {
         'name': 'Solana',
-        'scraper_script': 'polytrader.py',
+        'scraper_script': 'polytrader_continuous.py',
         'db_file': 'sol_polyscraper.db',
         'spot_decimals': 3
     },
     'xrp': {
         'name': 'XRP',
-        'scraper_script': 'polytrader.py',
+        'scraper_script': 'polytrader_continuous.py',
         'db_file': 'xrp_polyscraper.db',
         'spot_decimals': 4
     },
     'eth': {
         'name': 'Ethereum',
-        'scraper_script': 'polytrader.py',
+        'scraper_script': 'polytrader_continuous.py',
         'db_file': 'eth_polyscraper.db',
         'spot_decimals': 3
     }
@@ -134,7 +134,9 @@ def run_scraper(currency):
         python_executable = os.path.join(BASE_DIR, 'venv/bin/python')
         
         # Updated to use the new consolidated script with currency argument
-        subprocess.Popen([python_executable, script_path, currency, '--run-once'])
+        # Note: polytrader_continuous.py runs all currencies automatically
+    # For now, just run a test cycle
+    subprocess.Popen([python_executable, script_path, '--test'])
         return jsonify({"status": "success", "message": f"{config['name']} scraper job initiated."}), 202
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500

@@ -204,7 +204,7 @@ def get_live_price_and_ofi(currency):
         return None, None
 
 def get_order_book_prices(token_id):
-    """Get current market prices from order book."""
+    """Get best bid and ask prices from order book for trading."""
     try:
         wait_for_rate_limit()
         response = requests.get(f"{CLOB_API_URL}/book", 
@@ -354,7 +354,7 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
 
 def save_data_point(currency, timestamp, market_name, token_id_yes, best_bid, best_ask, spot_price, ofi, prediction):
     """Efficiently save data point to cache - only UP token data."""
-    # Only save the YES token data (UP direction)
+    # Only save the YES token data (UP direction) with bid/ask
     data_point = (timestamp, market_name, token_id_yes, best_bid, best_ask, spot_price, ofi, prediction)
     state.data_cache[currency].append(data_point)
 
@@ -431,7 +431,7 @@ def trade_currency_cycle(currency):
         if not spot_price:
             return False
         
-        # Step 3: Get order book
+        # Step 3: Get order book prices
         start = time.time()
         best_bid, best_ask = get_order_book_prices(token_yes)
         timings['orderbook'] = time.time() - start

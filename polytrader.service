@@ -7,7 +7,7 @@ Wants=network.target
 Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/Polyscraper
-ExecStart=/home/ubuntu/Polyscraper/deploy_live.sh
+ExecStart=/home/ubuntu/Polyscraper/venv/bin/python /home/ubuntu/Polyscraper/polytrader_continuous.py
 Restart=always
 RestartSec=10
 Environment=POLYMARKET_PRIVATE_KEY=0xcf71f00a307e65f37e1c7a9111d2822b869b6fa04b78df8833c1e565e37089eb

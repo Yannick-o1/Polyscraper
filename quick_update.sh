@@ -10,7 +10,6 @@ echo "🚀 Quick EC2 Update Starting..."
 # Upload the main files
 echo "📤 Uploading updated files..."
 scp polytrader_continuous.py "$EC2_USER@$EC2_IP:/home/ubuntu/Polyscraper/"
-scp deploy_live.sh "$EC2_USER@$EC2_IP:/home/ubuntu/Polyscraper/"
 scp polytrader.service "$EC2_USER@$EC2_IP:/home/ubuntu/Polyscraper/"
 
 # Restart the service remotely
