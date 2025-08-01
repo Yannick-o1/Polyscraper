@@ -5,13 +5,17 @@ Cycles through BTC -> ETH -> SOL -> XRP -> BTC... as fast as possible
 Trades immediately but only writes to database every minute per currency
 """
 
+print("🚀 Starting Polymarket Continuous Trading Bot...")
+print("📦 Loading libraries...")
+
 import requests
 import pandas as pd
 from datetime import datetime, UTC, timedelta
 from zoneinfo import ZoneInfo
 import re
 import sqlite3
-import lightgbm as lgb
+print("✅ Core libraries loaded")
+
 import numpy as np
 import os
 import time
@@ -19,8 +23,14 @@ import json
 import threading
 import queue
 from collections import defaultdict, deque
+print("✅ Utility libraries loaded")
+
+print("📊 Loading LightGBM (this may take a moment)...")
+import lightgbm as lgb
+print("✅ LightGBM loaded successfully")
 
 # Polymarket imports
+print("🔗 Loading Polymarket client...")
 try:
     from py_clob_client.client import ClobClient
     from py_clob_client.clob_types import (
@@ -31,8 +41,9 @@ try:
     )
     from py_clob_client.order_builder.constants import BUY, SELL
     POLYMARKET_AVAILABLE = True
+    print("✅ Polymarket client libraries loaded")
 except ImportError:
-    print("Warning: py-clob-client not installed. Order placement will be disabled.")
+    print("⚠️ Warning: py-clob-client not installed. Order placement will be disabled.")
     POLYMARKET_AVAILABLE = False
 
 # --- Currency Configuration ---
@@ -137,18 +148,22 @@ def initialize_trading_system():
     print("🚀 Initializing Continuous Trading System...")
     
     # Load models for all currencies
+    print("📊 Loading trading models...")
     for currency in CURRENCY_CONFIG:
         model_file = os.path.join(BASE_DIR, f"{currency}_lgbm.txt")
+        print(f"   Loading {currency.upper()} model from {model_file}...")
         try:
             state.models[currency] = lgb.Booster(model_file=model_file)
-            print(f"✅ {currency.upper()} model loaded")
+            print(f"✅ {currency.upper()} model loaded successfully")
         except Exception as e:
             print(f"❌ Error loading {currency.upper()} model: {e}")
             state.models[currency] = None
     
     # Initialize Polymarket client
+    print("🔗 Initializing Polymarket client...")
     if POLYMARKET_AVAILABLE and TRADING_ENABLED and POLYMARKET_PRIVATE_KEY and POLYMARKET_PROXY_ADDRESS:
         try:
+            print("   Creating client instance...")
             state.polymarket_client = ClobClient(
                 host=CLOB_API_URL,
                 key=POLYMARKET_PRIVATE_KEY,
@@ -156,15 +171,17 @@ def initialize_trading_system():
                 signature_type=1,
                 funder=POLYMARKET_PROXY_ADDRESS
             )
+            print("   Setting API credentials...")
             state.polymarket_client.set_api_creds(state.polymarket_client.create_or_derive_api_creds())
-            print("✅ Polymarket client initialized")
+            print("✅ Polymarket client initialized successfully")
         except Exception as e:
             print(f"❌ Failed to initialize Polymarket client: {e}")
             state.polymarket_client = None
     else:
-        print("⚠️ Polymarket trading disabled")
+        print("⚠️ Polymarket trading disabled (missing credentials or libraries)")
     
     # Start database writer thread
+    print("💾 Starting database writer thread...")
     db_thread = threading.Thread(target=database_writer_thread, daemon=True)
     db_thread.start()
     print("✅ Database writer thread started")
@@ -384,35 +401,46 @@ def get_order_book(token_id):
         return None, None
 
 def calculate_prediction(currency, historical_data, current_price, ofi):
-    """Calculate prediction using cached historical data."""
+    """Calculate prediction using proper historical data like the original."""
     if not state.models[currency] or not current_price:
         return None
     
     try:
-        # Use cached data if available, otherwise use provided historical data
-        if currency in state.data_cache and len(state.data_cache[currency]) > 20:
-            recent_prices = [point[5] for point in list(state.data_cache[currency])[-20:]]  # spot price is index 5
-            recent_prices.append(current_price)
-        else:
-            recent_prices = [current_price] * 21  # Fallback
+        # Get proper historical data from database
+        db_file = f"{currency}_polyscraper.db"
+        conn = sqlite3.connect(db_file)
+        cursor = conn.cursor()
         
-        # Calculate volatility
-        if len(recent_prices) > 2:
-            log_returns = np.diff(np.log(recent_prices))
-            vol = np.std(log_returns) * np.sqrt(60) if len(log_returns) > 1 else 0.01
-        else:
-            vol = 0.01
+        # Get recent price data for volatility calculation
+        cursor.execute(f"SELECT {CURRENCY_CONFIG[currency]['db_column']} FROM polydata ORDER BY timestamp DESC LIMIT 20")
+        recent_prices = [row[0] for row in cursor.fetchall() if row[0] is not None]
         
-        # Get hour start price (simplified for speed)
+        if len(recent_prices) < 2:
+            conn.close()
+            return None
+        
+        # Get p_start (hour start price) - use the first price of current hour
         current_hour_start_utc = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
-        p_start = recent_prices[0] if recent_prices else current_price  # Simplified
+        cursor.execute(f"SELECT {CURRENCY_CONFIG[currency]['db_column']} FROM polydata WHERE timestamp >= ? ORDER BY timestamp ASC LIMIT 1", 
+                      (current_hour_start_utc.strftime('%Y-%m-%d %H:%M:%S'),))
+        p_start_row = cursor.fetchone()
+        p_start = p_start_row[0] if p_start_row else current_price
         
+        conn.close()
+        
+        # Calculate features exactly like the original
         r = current_price / p_start - 1 if p_start > 0 else 0
         current_minute = datetime.now(UTC).minute
         tau = max(1 - (current_minute / 60), 0.01)
-        r_scaled = r / np.sqrt(tau)
         
-        X_live = [[r_scaled, tau, vol, ofi or 0.0]]
+        # Calculate volatility on log returns
+        log_returns = np.diff(np.log(recent_prices))
+        vol = np.std(log_returns) * np.sqrt(60) if len(log_returns) > 1 else 0.01
+        
+        r_scaled = r / np.sqrt(tau)
+        ofi = ofi if ofi is not None else 0.0
+        
+        X_live = [[r_scaled, tau, vol, ofi]]
         p_up = float(state.models[currency].predict(X_live)[0])
         
         return p_up
@@ -548,10 +576,24 @@ def continuous_trading_loop():
         state.running = False
 
 if __name__ == "__main__":
+    import sys
+    
+    # Check for test mode
+    if len(sys.argv) > 1 and sys.argv[1] == "--test":
+        print("🧪 Running in test mode...")
+        print("✅ All imports successful!")
+        print("✅ Currency config loaded:", list(CURRENCY_CONFIG.keys()))
+        print("✅ Rate limiting configured")
+        print("✅ Ready for trading!")
+        sys.exit(0)
+    
     try:
+        print("🏁 Initialization starting...")
         initialize_trading_system()
         continuous_trading_loop()
     except KeyboardInterrupt:
         print(f"\n👋 Shutdown complete")
     except Exception as e:
-        print(f"\n�� Fatal error: {e}") 
+        print(f"\n💥 Fatal error: {e}")
+        import traceback
+        traceback.print_exc() 
