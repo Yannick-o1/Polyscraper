@@ -257,42 +257,88 @@ def calculate_model_prediction(currency, current_price, ofi):
         return None
 
 def execute_dynamic_position_management(currency, prediction, market_price, token_yes, token_no, best_bid, best_ask):
-    """Execute position adjustment based on model prediction."""
+    """Execute position adjustment based on model prediction with position tracking."""
     if not prediction or not TRADING_ENABLED:
         return {"executed": False, "reason": "no_prediction_or_disabled"}
     
-    # Calculate delta and target position
+    # Calculate delta and check threshold
     delta = (prediction - market_price) * 100
     
     if abs(delta) < PROBABILITY_DELTA_THRESHOLD:
         return {"executed": False, "reason": "delta_too_small", "delta": delta}
     
-    # Calculate target exposure
+    # Get current positions
+    current_yes, current_no = get_current_position(token_yes, token_no)
+    current_net = current_yes - current_no  # Net position (positive = bullish)
+    
+    # Calculate target position
     target_exposure = BANKROLL_FRACTION * BANKROLL * abs(delta) / 100
+    
+    if delta > 0:
+        # Bullish: want long YES position
+        target_yes = target_exposure / market_price if market_price > 0 else 0
+        target_no = 0
+        target_net = target_yes
+    else:
+        # Bearish: want long NO position  
+        target_yes = 0
+        target_no = target_exposure / (1 - market_price) if market_price < 1 else 0
+        target_net = -target_no
+    
+    # Calculate adjustment needed
+    position_adjustment = target_net - current_net
     
     # Check if we can afford minimum trade
     min_cost = MINIMUM_ORDER_SIZE_SHARES * max(market_price, 1-market_price)
+    
+    if abs(position_adjustment) < 0.001:
+        return {
+            "executed": False,
+            "reason": "position_aligned", 
+            "delta": delta,
+            "current_pos": f"{current_net:+.2f}",
+            "target_pos": f"{target_net:+.2f}",
+            "adjustment": f"{position_adjustment:+.2f}"
+        }
+    
+    if abs(position_adjustment) < MINIMUM_ORDER_SIZE_SHARES:
+        return {
+            "executed": False,
+            "reason": "adjustment_too_small",
+            "delta": delta,
+            "current_pos": f"{current_net:+.2f}",
+            "target_pos": f"{target_net:+.2f}",
+            "adjustment": f"{position_adjustment:+.2f}"
+        }
+    
     if min_cost > BANKROLL * 0.9:
         return {
-            "executed": False, 
+            "executed": False,
             "reason": "insufficient_funds",
             "delta": delta,
+            "current_pos": f"{current_net:+.2f}",
+            "target_pos": f"{target_net:+.2f}",
+            "adjustment": f"{position_adjustment:+.2f}",
             "needed": min_cost,
             "available": BANKROLL
         }
     
-    # For now, return success (actual trading logic would go here)
+    # For now, return simulated trade (would execute real trade here)
     return {
         "executed": True,
         "reason": "simulated_trade",
         "delta": delta,
-        "direction": "UP" if delta > 0 else "DOWN",
-        "target_exposure": target_exposure
+        "direction": "UP" if delta > 0 else "DOWN", 
+        "target_exposure": target_exposure,
+        "current_pos": f"{current_net:+.2f}",
+        "target_pos": f"{target_net:+.2f}",
+        "adjustment": f"{position_adjustment:+.2f}"
     }
 
-def save_data_point(currency, timestamp, market_name, token_id, best_bid, best_ask, spot_price, ofi, prediction):
-    """Efficiently save data point to cache."""
-    data_point = (timestamp, market_name, token_id, best_bid, best_ask, spot_price, ofi, prediction)
+def save_data_point(currency, timestamp, market_name, token_id_yes, best_bid, best_ask, spot_price, ofi, prediction):
+    """Efficiently save data point to cache - only UP token data."""
+    # Only save the YES token data (UP direction)
+    data_point = (timestamp, market_name, token_id_yes, best_bid, best_ask, spot_price, ofi, prediction)
     state.data_cache[currency].append(data_point)
 
 def write_cached_data_if_needed(currency):
@@ -303,6 +349,7 @@ def write_cached_data_if_needed(currency):
             try:
                 config = CURRENCY_CONFIG[currency]
                 latest_data = state.data_cache[currency][-1]
+                timestamp, market_name, token_id, best_bid, best_ask, spot_price, ofi, prediction = latest_data
                 
                 with sqlite3.connect(f"{currency}_polyscraper.db") as conn:
                     cursor = conn.cursor()
@@ -311,7 +358,35 @@ def write_cached_data_if_needed(currency):
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ''', latest_data)
                 
+                # Calculate and display model features
+                p_start = get_hour_start_price(currency, spot_price)
+                r = (spot_price / p_start - 1) if p_start > 0 else 0
+                current_minute = datetime.now(UTC).minute
+                tau = max(1 - (current_minute / 60), 0.01)
+                
+                # Get volatility from recent data
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    SELECT {config['db_column']} FROM polydata 
+                    WHERE {config['db_column']} IS NOT NULL 
+                    ORDER BY timestamp DESC LIMIT 20
+                """)
+                recent_prices = [row[0] for row in cursor.fetchall()]
+                
+                if len(recent_prices) >= 20:
+                    price_series = pd.Series(recent_prices[::-1])
+                    log_returns = np.log(price_series).diff()
+                    rolling_vol = log_returns.rolling(window=20, min_periods=2).std()
+                    vol = rolling_vol.iloc[-1] * np.sqrt(60) if not rolling_vol.empty else 0.01
+                else:
+                    vol = 0.01
+                    
+                if pd.isna(vol) or vol <= 0:
+                    vol = 0.01
+                
                 print(f"📝 {currency.upper()}: DB written ({len(state.data_cache[currency])} points)")
+                print(f"    📊 Features: ofi={ofi:.4f} | r={r:.4f} | p_start=${p_start:.2f} | vol={vol:.4f} | tau={tau:.3f}")
+                
                 state.last_db_write[currency] = now
                 
             except Exception as e:
@@ -370,15 +445,21 @@ def trade_currency_cycle(currency):
         else:
             print(f"  🔸 {currency.upper()}: P=N/A M={market_price*100:.1f}%")
         
-        print(f"    ⏱️ {total_time:.3f}s [Market:{timings['market']:.3f} | Binance:{timings['binance']:.3f} | OrderBook:{timings['orderbook']:.3f} | Prediction:{timings['prediction']:.3f} | Trading:{timings['trading']:.3f}]")
-        
-        # Display trade result
+        # Display trade result with position info
         if trade_result["executed"]:
             print(f"    💰 SIMULATED: {trade_result['direction']} exposure ${trade_result['target_exposure']:.2f}")
+            print(f"    📊 Position: {trade_result['current_pos']} → {trade_result['target_pos']} (want Δ{trade_result['adjustment']})")
         elif trade_result["reason"] == "delta_too_small":
             print(f"    ⏸️ FLAT: Delta {trade_result['delta']:.1f}pp below threshold ({PROBABILITY_DELTA_THRESHOLD}pp)")
         elif trade_result["reason"] == "insufficient_funds":
             print(f"    💸 TOO EXPENSIVE: Need ${trade_result['needed']:.2f}, have ${trade_result['available']:.2f}")
+            print(f"    📊 Position: {trade_result['current_pos']} → {trade_result['target_pos']} (want Δ{trade_result['adjustment']})")
+        elif trade_result["reason"] == "adjustment_too_small":
+            print(f"    📏 TOO SMALL: Adjustment {trade_result['adjustment']} below minimum")
+            print(f"    📊 Position: {trade_result['current_pos']} → {trade_result['target_pos']} (want Δ{trade_result['adjustment']})")
+        elif trade_result["reason"] == "position_aligned":
+            print(f"    ✅ ALIGNED: Position already optimal")
+            print(f"    📊 Position: {trade_result['current_pos']} → {trade_result['target_pos']} (Δ{trade_result['adjustment']})")
         
         # Save data
         timestamp = datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')
@@ -428,6 +509,10 @@ def continuous_trading_loop():
             timestamp = datetime.now(UTC).strftime('%H:%M:%S')
             print(f"\n⚡ {timestamp} [Cycle {cycle_count}]")
             
+            # Cancel all open orders from previous cycles for maximum dynamism
+            if TRADING_ENABLED:
+                cancel_all_open_orders()
+            
             # Trade each currency
             for currency in currencies:
                 if not state.running:
@@ -446,6 +531,84 @@ def continuous_trading_loop():
     except KeyboardInterrupt:
         print("\n👋 Shutdown requested")
         state.running = False
+
+def cancel_all_open_orders():
+    """Cancel all open orders to prevent overlapping and increase dynamism."""
+    if not state.polymarket_client:
+        return 0
+    
+    try:
+        wait_for_rate_limit()
+        
+        # Get all open orders
+        response = state.polymarket_client.get_orders()
+        
+        if not response or 'data' not in response:
+            return 0
+        
+        open_orders = [order for order in response['data'] if order.get('status') == 'LIVE']
+        
+        if not open_orders:
+            return 0
+        
+        cancelled_count = 0
+        
+        # Cancel each open order
+        for order in open_orders:
+            try:
+                wait_for_rate_limit()
+                cancel_response = state.polymarket_client.cancel_order(order['id'])
+                
+                if cancel_response.get('success', False):
+                    cancelled_count += 1
+                    
+            except Exception:
+                # Log individual order cancellation errors but continue
+                pass
+        
+        if cancelled_count > 0:
+            print(f"  🗑️ Cancelled {cancelled_count} open orders")
+        
+        return cancelled_count
+        
+    except Exception:
+        # Silently handle API errors - don't let order cancellation stop trading
+        return 0
+
+def get_current_position(token_id_yes, token_id_no):
+    """Get current position in YES and NO tokens for a market."""
+    if not state.polymarket_client:
+        return 0, 0
+    
+    try:
+        wait_for_rate_limit()
+        
+        # Get balances for both YES and NO tokens
+        balance_params = BalanceAllowanceParams(
+            asset_type=AssetType.CONDITIONAL,
+            token_ids=[token_id_yes, token_id_no]
+        )
+        
+        response = state.polymarket_client.get_balances(balance_params)
+        
+        if not response or 'balances' not in response:
+            return 0, 0
+        
+        # Extract positions
+        yes_position = 0
+        no_position = 0
+        
+        for balance in response['balances']:
+            if balance['token_id'] == token_id_yes:
+                yes_position = float(balance.get('balance', 0))
+            elif balance['token_id'] == token_id_no:
+                no_position = float(balance.get('balance', 0))
+        
+        return yes_position, no_position
+        
+    except Exception:
+        # Don't let position lookup errors stop trading
+        return 0, 0
 
 # === MAIN EXECUTION ===
 if __name__ == "__main__":
