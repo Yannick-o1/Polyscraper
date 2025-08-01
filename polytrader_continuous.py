@@ -160,7 +160,7 @@ def get_market_data(currency):
             print(f"   Using fallback market: {latest_market['market_name']}")
         else:
             latest_market = matching_rows.iloc[0]
-            print(f"✅ Found current hour market: {latest_market['market_name']}")
+            # Market found - no need to log this every time
         
         token_id_yes = str(int(latest_market['token_id_yes']))
         token_id_no = str(int(latest_market['token_id_no']))
@@ -539,6 +539,7 @@ def continuous_trading_loop():
             # Cycle timing
             cycle_time = time.time() - cycle_start
             print(f"  📈 Total cycle time: {cycle_time:.1f}s")
+            print()  # Add blank line between cycles
             
             # Sleep until next cycle
             sleep_time = max(0, CYCLE_DELAY_SECONDS - cycle_time)
