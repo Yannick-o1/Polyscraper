@@ -101,7 +101,7 @@ def wait_for_rate_limit():
     state.api_call_times.append(now)
 
 def get_hour_start_price(currency, current_crypto_price):
-    """Get exact hour start price - cache the FIRST CRYPTO price we see each hour."""
+    """Get exact price from Binance at the precise start of the current hour."""
     hour_key = datetime.now(UTC).strftime('%Y-%m-%d_%H')
     
     # Check if we already have p_start cached for this hour
@@ -112,34 +112,40 @@ def get_hour_start_price(currency, current_crypto_price):
         # Initialize cache for this hour
         state.hour_start_cache[hour_key] = {}
     
-    # Try to get p_start from database first (if we have data from this hour)
+    # Get exact hour start timestamp
+    hour_start = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+    hour_start_ms = int(hour_start.timestamp() * 1000)
+    
     try:
         config = CURRENCY_CONFIG[currency]
-        with sqlite3.connect(f"{currency}_polyscraper.db") as conn:
-            cursor = conn.cursor()
+        wait_for_rate_limit()
+        
+        # Get price from Binance at exact hour start using klines
+        response = requests.get("https://api.binance.com/api/v3/klines", 
+                              params={
+                                  "symbol": config['asset_symbol'], 
+                                  "interval": "1m",
+                                  "startTime": hour_start_ms,
+                                  "limit": 1
+                              }, 
+                              timeout=5)
+        response.raise_for_status()
+        
+        klines = response.json()
+        if klines:
+            # Kline format: [open_time, open, high, low, close, volume, close_time, ...]
+            # Use opening price of the first minute of the hour
+            p_start = float(klines[0][1])  # open price
+            state.hour_start_cache[hour_key][currency] = p_start
+            print(f"📌 {currency.upper()}: Fetched exact hour start price ${p_start:.2f} from Binance for {hour_key}")
+            return p_start
             
-            # Get earliest CRYPTO price from this hour (from Binance data!)
-            hour_start = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
-            cursor.execute(f"""
-                SELECT {config['db_column']} FROM polydata 
-                WHERE timestamp >= ? AND {config['db_column']} IS NOT NULL
-                ORDER BY timestamp ASC LIMIT 1
-            """, (hour_start.strftime('%Y-%m-%d %H:%M:%S'),))
-            
-            result = cursor.fetchone()
-            if result:
-                # Found crypto price from database
-                p_start = result[0]
-                state.hour_start_cache[hour_key][currency] = p_start
-                return p_start
-                
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"⚠️ Failed to get hour start price from Binance for {currency}: {e}")
     
-    # No database data yet - this IS the first crypto price of the hour!
-    # Cache it and use it for all subsequent calls this hour
+    # Fallback to current price if Binance call fails
     state.hour_start_cache[hour_key][currency] = current_crypto_price
-    print(f"📌 {currency.upper()}: Cached hour start crypto price ${current_crypto_price:.2f} for {hour_key}")
+    print(f"📌 {currency.upper()}: Using current price ${current_crypto_price:.2f} as fallback for {hour_key}")
     return current_crypto_price
 
 def get_market_data(currency):
