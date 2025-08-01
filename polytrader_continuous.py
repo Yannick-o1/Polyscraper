@@ -97,18 +97,21 @@ DATA_API_URL = "https://gamma-api.polymarket.com"
 
 # --- Trading Configuration ---
 TRADING_ENABLED = True
-POLYMARKET_PRIVATE_KEY = os.getenv("POLYMARKET_PRIVATE_KEY", "")
-POLYMARKET_PROXY_ADDRESS = os.getenv("POLYMARKET_PROXY_ADDRESS", "")
+POLYMARKET_PRIVATE_KEY = os.getenv("POLYMARKET_PRIVATE_KEY")
+POLYMARKET_PROXY_ADDRESS = os.getenv("POLYMARKET_PROXY_ADDRESS")
 POLYMARKET_CHAIN_ID = 137
-PROBABILITY_DELTA_DEADZONE_THRESHOLD = 3.0
-BANKROLL_USAGE_FRACTION = 0.95
-MINIMUM_ORDER_SIZE_SHARES = 5.0
 
-# --- Rate Limiting Configuration ---
-BINANCE_REQUESTS_PER_MINUTE = 1000  # Conservative limit (API allows 1200)
-POLYMARKET_REQUESTS_PER_MINUTE = 300  # Conservative estimate
-CYCLE_DELAY_SECONDS = 2.0  # Minimum delay between currency cycles
-DB_WRITE_INTERVAL_SECONDS = 60  # Write to DB every 60 seconds per currency
+# Position sizing configuration
+BANKROLL = 0.30  # Your current balance
+BANKROLL_FRACTION = 0.8  # Use 80% of bankroll for sizing
+PROBABILITY_DELTA_DEADZONE_THRESHOLD = 3.0  # 3pp threshold
+MINIMUM_ORDER_SIZE_SHARES = 0.01
+
+# Rate limiting
+CYCLE_DELAY_SECONDS = 2.0
+DB_WRITE_INTERVAL_SECONDS = 60
+API_CALLS_PER_MINUTE = 100
+state.api_calls = deque()
 
 # --- Global State ---
 class TradingState:
@@ -134,13 +137,46 @@ def wait_for_rate_limit():
         state.api_call_times.popleft()
     
     # If we're approaching the limit, wait
-    if len(state.api_call_times) >= BINANCE_REQUESTS_PER_MINUTE * 0.8:  # 80% of limit
+    if len(state.api_call_times) >= API_CALLS_PER_MINUTE * 0.8:  # 80% of limit
         sleep_time = 60 - (now - state.api_call_times[0])
         if sleep_time > 0:
             print(f"Rate limit protection: sleeping {sleep_time:.1f}s")
             time.sleep(sleep_time)
     
     state.api_call_times.append(now)
+
+def get_or_set_hour_start_price(currency, current_price):
+    """Get or set the exact hour start price using caching."""
+    try:
+        config = CURRENCY_CONFIG[currency]
+        db_file = f"{currency}_polyscraper.db"
+        conn = sqlite3.connect(db_file)
+        cursor = conn.cursor()
+        
+        # Create hour key for current hour
+        current_hour_utc = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+        hour_key = current_hour_utc.strftime('%Y-%m-%d_%H')
+        
+        # Try to get cached hour start price
+        cursor.execute("SELECT p_start_price FROM p_start_cache WHERE hour_key = ?", (hour_key,))
+        cached_result = cursor.fetchone()
+        
+        if cached_result:
+            # Use cached hour start price
+            p_start = cached_result[0]
+        else:
+            # This is the first time in this hour - cache the current price as hour start
+            p_start = current_price
+            cursor.execute("INSERT OR REPLACE INTO p_start_cache (hour_key, p_start_price) VALUES (?, ?)", 
+                          (hour_key, p_start))
+            conn.commit()
+        
+        conn.close()
+        return p_start
+        
+    except Exception as e:
+        # Fallback to current price if caching fails
+        return current_price
 
 # --- Initialization ---
 def initialize_trading_system():
@@ -230,23 +266,10 @@ def write_cached_data_to_db(currency):
         # Extract features for display
         timestamp, market_name, token_id, best_bid, best_ask, spot_price, ofi, p_up_prediction = latest_data
         
-        # Calculate display features (same as in calculate_prediction)
+        # Calculate display features using exact hour start price
         try:
-            # Get p_start for r calculation - use a more robust approach
-            current_hour_start_utc = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
-            
-            # Try to get hour start price from current hour data
-            cursor.execute(f"SELECT {config['db_column']} FROM polydata WHERE timestamp >= ? ORDER BY timestamp ASC LIMIT 1", 
-                          (current_hour_start_utc.strftime('%Y-%m-%d %H:%M:%S'),))
-            p_start_row = cursor.fetchone()
-            
-            if p_start_row and p_start_row[0] is not None:
-                p_start = p_start_row[0]
-            else:
-                # Fallback: get the most recent price from previous data
-                cursor.execute(f"SELECT {config['db_column']} FROM polydata WHERE {config['db_column']} IS NOT NULL ORDER BY timestamp DESC LIMIT 1")
-                fallback_row = cursor.fetchone()
-                p_start = fallback_row[0] if fallback_row and fallback_row[0] is not None else spot_price
+            # Use the same exact hour start price method
+            p_start = get_or_set_hour_start_price(currency, spot_price)
             
             # Calculate features
             r = (spot_price / p_start - 1) if p_start > 0 else 0
@@ -478,12 +501,8 @@ def calculate_prediction(currency, historical_data, current_price, ofi):
             conn.close()
             return None
         
-        # Get p_start (hour start price) - use the first price of current hour
-        current_hour_start_utc = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
-        cursor.execute(f"SELECT {CURRENCY_CONFIG[currency]['db_column']} FROM polydata WHERE timestamp >= ? ORDER BY timestamp ASC LIMIT 1", 
-                      (current_hour_start_utc.strftime('%Y-%m-%d %H:%M:%S'),))
-        p_start_row = cursor.fetchone()
-        p_start = p_start_row[0] if p_start_row else current_price
+        # Get p_start (hour start price) using exact caching
+        p_start = get_or_set_hour_start_price(currency, current_price)
         
         conn.close()
         
@@ -508,42 +527,86 @@ def calculate_prediction(currency, historical_data, current_price, ofi):
         print(f"❌ Prediction error for {currency}: {e}")
         return None
 
-def manage_positions_fast(currency, delta, token_id_yes, token_id_no, price_yes, price_no, best_bid_yes, best_ask_yes):
-    """Fast position management with realistic sizing based on available balance."""
-    if not state.polymarket_client or abs(delta) < PROBABILITY_DELTA_DEADZONE_THRESHOLD:
-        return {"executed": False, "reason": "no_client_or_small_delta", "balance_issue": False}
+def manage_positions_dynamic(currency, delta, token_id_yes, token_id_no, price_yes, price_no, best_bid_yes, best_ask_yes):
+    """Dynamic position management: adjust position to match target based on delta."""
+    if not state.polymarket_client:
+        return {"executed": False, "reason": "no_client", "current_pos": "N/A", "target_pos": "N/A"}
     
-    # Calculate realistic position size based on small balance
-    # With only $0.30, we need very small positions
-    target_direction = "UP" if delta > 0 else "DOWN"
-    
-    if target_direction == "UP" and price_yes > 0:
-        buy_price = min(0.99, best_bid_yes + 0.01)
-        # Calculate max affordable shares with available balance ($0.30)
-        max_affordable = 0.25 / buy_price  # Use $0.25 to leave some buffer
-        # Scale with delta but cap at affordable amount
-        target_size = min(abs(delta) * 0.05, max_affordable, 1.0)  # Much smaller sizing
+    try:
+        # 1. Get current positions
+        current_yes, current_no = get_current_position(token_id_yes, token_id_no)
+        current_net = current_yes - current_no  # Net position (positive = bullish)
         
-        result = place_order(BUY, token_id_yes, buy_price, target_size)
-        result["direction"] = "UP"
-        result["target_size"] = target_size
-        result["target_price"] = buy_price
+        # 2. Calculate target position based on delta
+        if abs(delta) < PROBABILITY_DELTA_DEADZONE_THRESHOLD:
+            target_yes, target_no = 0, 0  # Flat position
+            target_net = 0
+        else:
+            # Target exposure = fraction of bankroll * delta strength
+            bankroll = 0.30  # Your current balance
+            bankroll_fraction = 0.8  # Use 80% of bankroll
+            target_exposure = bankroll_fraction * bankroll * abs(delta) / 100
+            
+            if delta > 0:
+                # Bullish: want long YES position
+                target_yes = target_exposure / price_yes if price_yes > 0 else 0
+                target_no = 0
+                target_net = target_yes
+            else:
+                # Bearish: want long NO position
+                target_yes = 0
+                target_no = target_exposure / (1 - price_yes) if price_yes < 1 else 0
+                target_net = -target_no
+        
+        # 3. Calculate adjustment needed
+        position_adjustment = target_net - current_net
+        
+        # 4. Execute adjustment if significant enough
+        if abs(position_adjustment) < MINIMUM_ORDER_SIZE_SHARES:
+            return {
+                "executed": False, 
+                "reason": "position_aligned", 
+                "current_pos": f"{current_net:+.2f}",
+                "target_pos": f"{target_net:+.2f}",
+                "adjustment": f"{position_adjustment:+.2f}"
+            }
+        
+        # 5. Place adjustment order
+        if position_adjustment > 0:
+            # Need more bullish exposure → Buy YES or Sell NO
+            if delta > 0:
+                # Buy YES tokens
+                buy_price = min(0.99, best_bid_yes + 0.01)
+                shares_to_buy = min(position_adjustment, (bankroll * 0.8) / buy_price)
+                result = place_order(BUY, token_id_yes, buy_price, shares_to_buy)
+                action = f"BUY YES {shares_to_buy:.2f} @ ${buy_price:.2f}"
+            else:
+                # This shouldn't happen in our logic, but handle gracefully
+                return {"executed": False, "reason": "logic_error"}
+        else:
+            # Need less bullish exposure → Sell YES or Buy NO
+            if delta < 0:
+                # Buy NO tokens
+                buy_price = min(0.99, 1 - best_ask_yes + 0.01)
+                shares_to_buy = min(abs(position_adjustment), (bankroll * 0.8) / buy_price)
+                result = place_order(BUY, token_id_no, buy_price, shares_to_buy)
+                action = f"BUY NO {shares_to_buy:.2f} @ ${buy_price:.2f}"
+            else:
+                # This shouldn't happen in our logic, but handle gracefully
+                return {"executed": False, "reason": "logic_error"}
+        
+        # 6. Return detailed result
+        result.update({
+            "current_pos": f"{current_net:+.2f}",
+            "target_pos": f"{target_net:+.2f}",
+            "adjustment": f"{position_adjustment:+.2f}",
+            "action": action
+        })
+        
         return result
         
-    elif target_direction == "DOWN" and price_no > 0:
-        buy_price = min(0.99, (1 - best_ask_yes) + 0.01)
-        # Calculate max affordable shares with available balance ($0.30)
-        max_affordable = 0.25 / buy_price  # Use $0.25 to leave some buffer
-        # Scale with delta but cap at affordable amount
-        target_size = min(abs(delta) * 0.05, max_affordable, 1.0)  # Much smaller sizing
-        
-        result = place_order(BUY, token_id_no, buy_price, target_size)
-        result["direction"] = "DOWN"
-        result["target_size"] = target_size
-        result["target_price"] = buy_price
-        return result
-    else:
-        return {"executed": False, "reason": "invalid_prices", "balance_issue": False}
+    except Exception as e:
+        return {"executed": False, "reason": str(e), "current_pos": "Error", "target_pos": "Error"}
 
 def cancel_all_open_orders():
     """Cancel all open orders to prevent overlapping and increase dynamism."""
@@ -587,6 +650,79 @@ def cancel_all_open_orders():
     except Exception as e:
         # Silently handle API errors - don't let order cancellation stop trading
         return 0
+
+def get_current_position(token_id_yes, token_id_no):
+    """Get current position in YES and NO tokens for a market."""
+    if not state.polymarket_client:
+        return 0, 0
+    
+    try:
+        wait_for_rate_limit()
+        
+        # Get balances for both YES and NO tokens
+        balance_params = BalanceAllowanceParams(
+            asset_type=AssetType.CONDITIONAL,
+            token_ids=[token_id_yes, token_id_no]
+        )
+        
+        response = state.polymarket_client.get_balances(balance_params)
+        
+        if not response or 'balances' not in response:
+            return 0, 0
+        
+        # Extract positions
+        yes_position = 0
+        no_position = 0
+        
+        for balance in response['balances']:
+            if balance['token_id'] == token_id_yes:
+                yes_position = float(balance.get('balance', 0))
+            elif balance['token_id'] == token_id_no:
+                no_position = float(balance.get('balance', 0))
+        
+        return yes_position, no_position
+        
+    except Exception as e:
+        # Don't let position lookup errors stop trading
+        return 0, 0
+
+def calculate_target_position(delta, bankroll=0.30, bankroll_fraction=0.8):
+    """Calculate target position based on delta and bankroll."""
+    if abs(delta) < PROBABILITY_DELTA_DEADZONE_THRESHOLD:
+        return 0, 0  # Flat when delta too small
+    
+    # Calculate target exposure
+    target_exposure = bankroll_fraction * bankroll * abs(delta) / 100
+    
+    if delta > 0:
+        # Bullish: long YES tokens
+        return target_exposure, 0
+    else:
+        # Bearish: long NO tokens  
+        return 0, target_exposure
+
+def calculate_position_adjustment(current_yes, current_no, target_yes, target_no):
+    """Calculate what trades are needed to adjust position."""
+    yes_adjustment = target_yes - current_yes
+    no_adjustment = target_no - current_no
+    
+    trades_needed = []
+    
+    # YES token adjustments
+    if abs(yes_adjustment) > MINIMUM_ORDER_SIZE_SHARES:
+        if yes_adjustment > 0:
+            trades_needed.append(("BUY_YES", yes_adjustment))
+        else:
+            trades_needed.append(("SELL_YES", abs(yes_adjustment)))
+    
+    # NO token adjustments
+    if abs(no_adjustment) > MINIMUM_ORDER_SIZE_SHARES:
+        if no_adjustment > 0:
+            trades_needed.append(("BUY_NO", no_adjustment))
+        else:
+            trades_needed.append(("SELL_NO", abs(no_adjustment)))
+    
+    return trades_needed
 
 # --- Main Trading Loop ---
 def trade_currency_once(currency):
@@ -640,11 +776,16 @@ def trade_currency_once(currency):
             prediction_pct = p_up_prediction * 100
             market_pct = price_yes * 100
             
-            # Determine action
-            action = "BUY" if delta > PROBABILITY_DELTA_DEADZONE_THRESHOLD else "SELL" if delta < -PROBABILITY_DELTA_DEADZONE_THRESHOLD else "HOLD"
+            # Determine action - fix the logic to show proper direction
+            if delta > PROBABILITY_DELTA_DEADZONE_THRESHOLD:
+                action = "BUY UP"  # Model predicts UP more than market
+            elif delta < -PROBABILITY_DELTA_DEADZONE_THRESHOLD:
+                action = "BUY DOWN"  # Model predicts DOWN more than market  
+            else:
+                action = "HOLD"
             
             if abs(delta) >= PROBABILITY_DELTA_DEADZONE_THRESHOLD:
-                trade_result = manage_positions_fast(currency, delta, token_id_yes, token_id_no, 
+                trade_result = manage_positions_dynamic(currency, delta, token_id_yes, token_id_no, 
                                     price_yes, price_no, best_bid_price, best_ask_price)
                                     
             # Clean output
@@ -665,16 +806,27 @@ def trade_currency_once(currency):
         total_time = sum(timings.values())
         print(f"    ⏱️ {total_time:.3f}s [Market:{timings['market_lookup']:.3f} | Binance:{timings['binance_data']:.3f} | OrderBook:{timings['order_book']:.3f} | Prediction:{timings['prediction']:.3f} | Trading:{timings['trading_logic']:.3f}]")
         
-        # Trade execution outcome
+        # Trade execution outcome with position info
         if trade_result:
+            current_pos = trade_result.get('current_pos', 'N/A')
+            target_pos = trade_result.get('target_pos', 'N/A')
+            adjustment = trade_result.get('adjustment', 'N/A')
+            
             if trade_result["executed"]:
-                print(f"    💰 EXECUTED: {trade_result['direction']} ${trade_result['target_price']:.2f} × {trade_result['target_size']:.1f} shares")
+                action = trade_result.get('action', 'Unknown action')
+                print(f"    💰 EXECUTED: {action}")
+                print(f"    📊 Position: {current_pos} → {target_pos} (Δ{adjustment})")
+            elif trade_result.get("reason") == "position_aligned":
+                print(f"    ✅ ALIGNED: Position {current_pos} matches target {target_pos}")
             elif trade_result["balance_issue"]:
-                print(f"    💸 SKIPPED: Insufficient balance (need ~${trade_result.get('target_size', 0) * trade_result.get('target_price', 0):.2f})")
+                print(f"    💸 SKIPPED: Insufficient balance")
+                print(f"    📊 Position: {current_pos} → {target_pos} (need Δ{adjustment})")
             else:
-                print(f"    ❌ FAILED: {trade_result['reason']}")
+                reason = trade_result['reason']
+                print(f"    ❌ FAILED: {reason}")
+                print(f"    📊 Position: {current_pos} → {target_pos} (target Δ{adjustment})")
         elif TRADING_ENABLED and p_up_prediction is not None:
-            print(f"    ⏸️ HOLD: Delta {delta:.1f}pp below threshold ({PROBABILITY_DELTA_DEADZONE_THRESHOLD}pp)")
+            print(f"    ⏸️ FLAT: Delta {delta:.1f}pp below threshold ({PROBABILITY_DELTA_DEADZONE_THRESHOLD}pp) → Position = 0")
         
         return True
         
