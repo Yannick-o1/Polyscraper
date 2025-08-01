@@ -166,6 +166,10 @@ def get_market_data(currency):
         token_id_no = str(int(latest_market['token_id_no']))
         market_name = latest_market['market_name']
         
+        print(f"🔍 DEBUG: Selected market: {market_name}")
+        print(f"🔍 DEBUG: YES token: {token_id_yes}")
+        print(f"🔍 DEBUG: NO token: {token_id_no}")
+        
         return token_id_yes, token_id_no, market_name
         
     except Exception as e:
@@ -207,22 +211,36 @@ def get_order_book_prices(token_id):
     """Get best bid and ask prices from order book for trading."""
     try:
         wait_for_rate_limit()
-        response = requests.get(f"{CLOB_API_URL}/book", 
-                              params={"token_id": token_id}, timeout=5)
+        url = f"{CLOB_API_URL}/book"
+        params = {"token_id": token_id}
+        
+        print(f"🔍 DEBUG: Fetching order book for token {token_id}")
+        print(f"🔍 DEBUG: URL: {url}?token_id={token_id}")
+        
+        response = requests.get(url, params=params, timeout=5)
         response.raise_for_status()
         
         data = response.json()
         bids = data.get('bids', [])
         asks = data.get('asks', [])
         
+        print(f"🔍 DEBUG: Got {len(bids)} bids, {len(asks)} asks")
+        if bids:
+            print(f"🔍 DEBUG: Best bid: {bids[0]}")
+        if asks:
+            print(f"🔍 DEBUG: Best ask: {asks[0]}")
+        
         if bids and asks:
             best_bid = float(bids[0]['price'])
             best_ask = float(asks[0]['price'])
+            print(f"🔍 DEBUG: Parsed best_bid={best_bid}, best_ask={best_ask}")
             return best_bid, best_ask
             
+        print(f"🔍 DEBUG: Missing bids or asks!")
         return None, None
         
-    except Exception:
+    except Exception as e:
+        print(f"🔍 DEBUG: Order book API error: {e}")
         return None, None
 
 def calculate_model_prediction(currency, current_price, ofi):
