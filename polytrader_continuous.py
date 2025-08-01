@@ -837,42 +837,68 @@ def execute_mock_trading(currency, prediction, market_price, spot_price):
         action = "HOLD"
         amount = 0
         
-        # Close existing position if direction changed or going flat
-        if position['direction'] and position['direction'] != target_direction:
-            # Sell existing position
-            price = market_price if position['direction'] == 'UP' else (1 - market_price)
-            cash_received = position['shares'] * price
-            cost_of_shares = position['shares'] * position['avg_cost']
-            trade_pnl = cash_received - cost_of_shares
-            
-            state.mock_available_cash += cash_received
-            amount = position['shares']
-            action = f"SELL {position['direction']}"
-            
-            # Clear position
-            position = {'direction': None, 'shares': 0, 'avg_cost': 0}
+        # Calculate current position value and target position value
+        current_pos_value = position['shares'] * (market_price if position['direction'] == 'UP' else (1 - market_price)) if position['shares'] > 0 else 0
         
-        # Open new position if target direction is set
-        if target_direction and target_value > 0.01:
-            price = market_price if target_direction == 'UP' else (1 - market_price)
-            shares_to_buy = target_value / price if price > 0 else 0
-            cost = shares_to_buy * price
-            
-            if cost <= state.mock_available_cash and shares_to_buy > 0.01:
-                state.mock_available_cash -= cost
+        # Determine if we need to adjust position
+        should_adjust = False
+        
+        # Case 1: Direction changed (e.g., UP -> DOWN or DOWN -> UP)
+        if position['direction'] and position['direction'] != target_direction:
+            should_adjust = True
+            print(f"       🔄 Direction change: {position['direction']} → {target_direction}")
+        
+        # Case 2: Going flat (target is None but we have position)
+        elif position['direction'] and target_direction is None:
+            should_adjust = True
+            print(f"       🔄 Going flat: {position['direction']} → FLAT")
+        
+        # Case 3: Position size mismatch (current vs target value)
+        elif position['shares'] > 0 and target_direction == position['direction']:
+            size_diff = abs(target_value - current_pos_value)
+            if size_diff > 0.5:  # If difference is more than $0.50
+                should_adjust = True
+                print(f"       🔄 Size adjustment: ${current_pos_value:.2f} → ${target_value:.2f}")
+        
+        # Case 4: New position when we have none
+        elif not position['direction'] and target_direction:
+            should_adjust = True
+            print(f"       🔄 New position: FLAT → {target_direction}")
+        
+        # Execute position adjustment
+        if should_adjust:
+            # First, close existing position if any
+            if position['shares'] > 0:
+                price = market_price if position['direction'] == 'UP' else (1 - market_price)
+                cash_received = position['shares'] * price
+                cost_of_shares = position['shares'] * position['avg_cost']
+                trade_pnl = cash_received - cost_of_shares
                 
-                if position['direction'] == target_direction:
-                    # Add to existing position
-                    total_cost = (position['shares'] * position['avg_cost']) + cost
-                    position['shares'] += shares_to_buy
-                    position['avg_cost'] = total_cost / position['shares']
-                    action = f"ADD {target_direction}"
-                else:
+                state.mock_available_cash += cash_received
+                print(f"       💰 Sold {position['shares']:.2f} {position['direction']} @ ${price:.3f} = ${cash_received:.2f}")
+                
+                # Clear position
+                position = {'direction': None, 'shares': 0, 'avg_cost': 0}
+                action = f"SELL {old_position['direction']}"
+                amount = old_position['shares']
+            
+            # Then, open new position if target direction is set
+            if target_direction and target_value > 0.01:
+                price = market_price if target_direction == 'UP' else (1 - market_price)
+                shares_to_buy = target_value / price if price > 0 else 0
+                cost = shares_to_buy * price
+                
+                if cost <= state.mock_available_cash and shares_to_buy > 0.01:
+                    state.mock_available_cash -= cost
+                    
                     # New position
                     position = {'direction': target_direction, 'shares': shares_to_buy, 'avg_cost': price}
                     action = f"BUY {target_direction}"
-                
-                amount = shares_to_buy
+                    amount = shares_to_buy
+                    
+                    print(f"       💰 Bought {shares_to_buy:.2f} {target_direction} @ ${price:.3f} = ${cost:.2f}")
+        else:
+            print(f"       ✅ Position optimal: {position['shares']:.2f} {position['direction']} = ${current_pos_value:.2f}")
         
         # Update position
         state.mock_positions[currency] = position
