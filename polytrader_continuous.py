@@ -100,8 +100,8 @@ def wait_for_rate_limit():
     
     state.api_call_times.append(now)
 
-def get_hour_start_price(currency, current_price):
-    """Get exact hour start price - cache the FIRST price we see each hour."""
+def get_hour_start_price(currency, current_crypto_price):
+    """Get exact hour start price - cache the FIRST CRYPTO price we see each hour."""
     hour_key = datetime.now(UTC).strftime('%Y-%m-%d_%H')
     
     # Check if we already have p_start cached for this hour
@@ -118,7 +118,7 @@ def get_hour_start_price(currency, current_price):
         with sqlite3.connect(f"{currency}_polyscraper.db") as conn:
             cursor = conn.cursor()
             
-            # Get earliest price from this hour
+            # Get earliest CRYPTO price from this hour (from Binance data!)
             hour_start = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
             cursor.execute(f"""
                 SELECT {config['db_column']} FROM polydata 
@@ -128,7 +128,7 @@ def get_hour_start_price(currency, current_price):
             
             result = cursor.fetchone()
             if result:
-                # Found price from database
+                # Found crypto price from database
                 p_start = result[0]
                 state.hour_start_cache[hour_key][currency] = p_start
                 return p_start
@@ -136,11 +136,11 @@ def get_hour_start_price(currency, current_price):
     except Exception:
         pass
     
-    # No database data yet - this IS the first price of the hour!
+    # No database data yet - this IS the first crypto price of the hour!
     # Cache it and use it for all subsequent calls this hour
-    state.hour_start_cache[hour_key][currency] = current_price
-    print(f"📌 {currency.upper()}: Cached hour start price ${current_price:.2f} for {hour_key}")
-    return current_price
+    state.hour_start_cache[hour_key][currency] = current_crypto_price
+    print(f"📌 {currency.upper()}: Cached hour start crypto price ${current_crypto_price:.2f} for {hour_key}")
+    return current_crypto_price
 
 def get_market_data(currency):
     """Get current market token IDs for the current hour."""
@@ -218,35 +218,49 @@ def get_order_book_prices(token_id):
     try:
         wait_for_rate_limit()
         
-        # Get best bid (buy side)
-        bid_response = requests.get(f"{CLOB_API_URL}/price", 
-                                  params={"token_id": token_id, "side": "buy"}, 
-                                  timeout=5)
-        bid_response.raise_for_status()
-        best_bid = float(bid_response.json()['price'])
+        # Make both calls in parallel using threading for speed
+        import threading
+        results = {}
         
-        wait_for_rate_limit()
+        def get_price(side, results_dict):
+            try:
+                response = requests.get(f"{CLOB_API_URL}/price", 
+                                      params={"token_id": token_id, "side": side}, 
+                                      timeout=5)
+                response.raise_for_status()
+                results_dict[side] = float(response.json()['price'])
+            except Exception as e:
+                results_dict[side] = None
         
-        # Get best ask (sell side)  
-        ask_response = requests.get(f"{CLOB_API_URL}/price",
-                                  params={"token_id": token_id, "side": "sell"},
-                                  timeout=5)
-        ask_response.raise_for_status()
-        best_ask = float(ask_response.json()['price'])
+        # Launch both requests simultaneously
+        bid_thread = threading.Thread(target=get_price, args=("buy", results))
+        ask_thread = threading.Thread(target=get_price, args=("sell", results))
         
-        return best_bid, best_ask
+        bid_thread.start()
+        ask_thread.start()
+        
+        bid_thread.join()
+        ask_thread.join()
+        
+        best_bid = results.get("buy")
+        best_ask = results.get("sell")
+        
+        if best_bid is not None and best_ask is not None:
+            return best_bid, best_ask
+        
+        return None, None
         
     except Exception as e:
         print(f"❌ Price API error for token {token_id}: {e}")
         return None, None
 
-def calculate_model_prediction(currency, current_price, ofi):
+def calculate_model_prediction(currency, current_price, ofi, market_price):
     """Calculate model prediction with proper features."""
     if not state.models.get(currency) or not current_price:
         return None
         
     try:
-        # Get p_start and calculate features
+        # Get p_start and calculate features using CRYPTO prices
         p_start = get_hour_start_price(currency, current_price)
         r = (current_price / p_start - 1) if p_start > 0 else 0
         
@@ -390,7 +404,7 @@ def write_cached_data_if_needed(currency):
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ''', latest_data)
                 
-                # Calculate and display model features
+                # Calculate and display model features using CRYPTO prices
                 p_start = get_hour_start_price(currency, spot_price)
                 r = (spot_price / p_start - 1) if p_start > 0 else 0
                 current_minute = datetime.now(UTC).minute
@@ -458,7 +472,7 @@ def trade_currency_cycle(currency):
         
         # Step 4: Calculate prediction
         start = time.time()
-        prediction = calculate_model_prediction(currency, spot_price, ofi)
+        prediction = calculate_model_prediction(currency, spot_price, ofi, market_price)
         timings['prediction'] = time.time() - start
         
         # Step 5: Execute trading logic
@@ -468,14 +482,18 @@ def trade_currency_cycle(currency):
         )
         timings['trading'] = time.time() - start
         
-        # Log results
+        # Log results with detailed timing
         total_time = sum(timings.values())
+        timing_str = " | ".join([f"{k}:{v:.1f}s" for k, v in timings.items()])
+        
         if prediction:
             delta = (prediction - market_price) * 100
             action = "BUY UP" if delta > PROBABILITY_DELTA_THRESHOLD else "BUY DOWN" if delta < -PROBABILITY_DELTA_THRESHOLD else "HOLD"
             print(f"  🔸 {currency.upper()}: {prediction*100:.1f}% vs {market_price*100:.1f}% (Δ{delta:+.1f}pp) → {action}")
         else:
             print(f"  🔸 {currency.upper()}: P=N/A M={market_price*100:.1f}%")
+        
+        print(f"    ⏱️ {timing_str} | total:{total_time:.1f}s")
         
         # Display trade result with position info
         if trade_result["executed"]:
@@ -551,12 +569,10 @@ def continuous_trading_loop():
                     break
                 trade_currency_cycle(currency)
             
-            # Cycle timing
-            cycle_time = time.time() - cycle_start
-            print(f"  📈 Total cycle time: {cycle_time:.1f}s")
             print()  # Add blank line between cycles
             
             # Sleep until next cycle
+            cycle_time = time.time() - cycle_start
             sleep_time = max(0, CYCLE_DELAY_SECONDS - cycle_time)
             if sleep_time > 0:
                 time.sleep(sleep_time)
