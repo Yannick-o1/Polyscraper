@@ -224,8 +224,7 @@ def get_order_book_prices(token_id):
     try:
         wait_for_rate_limit()
         
-        # Make both calls in parallel using threading for speed
-        import threading
+        # Make both calls in parallel for speed
         results = {}
         
         def get_price(side, results_dict):
@@ -348,8 +347,10 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
             "executed": False,
             "reason": "position_aligned", 
             "delta": delta,
-            "current_pos": f"{current_net:+.2f}",
-            "target_pos": f"{target_net:+.2f}",
+            "current_yes": current_yes,
+            "current_no": current_no,
+            "target_yes": target_yes,
+            "target_no": target_no,
             "adjustment": f"{position_adjustment:+.2f}"
         }
     
@@ -358,8 +359,10 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
             "executed": False,
             "reason": "adjustment_too_small",
             "delta": delta,
-            "current_pos": f"{current_net:+.2f}",
-            "target_pos": f"{target_net:+.2f}",
+            "current_yes": current_yes,
+            "current_no": current_no,
+            "target_yes": target_yes,
+            "target_no": target_no,
             "adjustment": f"{position_adjustment:+.2f}"
         }
     
@@ -368,8 +371,10 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
             "executed": False,
             "reason": "insufficient_funds",
             "delta": delta,
-            "current_pos": f"{current_net:+.2f}",
-            "target_pos": f"{target_net:+.2f}",
+            "current_yes": current_yes,
+            "current_no": current_no,
+            "target_yes": target_yes,
+            "target_no": target_no,
             "adjustment": f"{position_adjustment:+.2f}",
             "needed": min_cost,
             "available": BANKROLL
@@ -382,14 +387,15 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
         "delta": delta,
         "direction": "UP" if delta > 0 else "DOWN", 
         "target_exposure": target_exposure,
-        "current_pos": f"{current_net:+.2f}",
-        "target_pos": f"{target_net:+.2f}",
+        "current_yes": current_yes,
+        "current_no": current_no,
+        "target_yes": target_yes,
+        "target_no": target_no,
         "adjustment": f"{position_adjustment:+.2f}"
     }
 
 def save_data_point(currency, timestamp, market_name, token_id_yes, best_bid, best_ask, spot_price, ofi, prediction):
-    """Efficiently save data point to cache - only UP token data."""
-    # Only save the YES token data (UP direction) with bid/ask
+    """Save data point to cache."""
     data_point = (timestamp, market_name, token_id_yes, best_bid, best_ask, spot_price, ofi, prediction)
     state.data_cache[currency].append(data_point)
 
@@ -504,18 +510,18 @@ def trade_currency_cycle(currency):
         # Display trade result with position info
         if trade_result["executed"]:
             print(f"    💰 SIMULATED: {trade_result['direction']} exposure ${trade_result['target_exposure']:.2f}")
-            print(f"    📊 Position: {trade_result['current_pos']} → {trade_result['target_pos']} (want Δ{trade_result['adjustment']})")
+            print(f"    📊 YES: {trade_result['current_yes']:.2f}→{trade_result['target_yes']:.2f} | NO: {trade_result['current_no']:.2f}→{trade_result['target_no']:.2f}")
         elif trade_result["reason"] == "delta_too_small":
             print(f"    ⏸️ FLAT: Delta {trade_result['delta']:.1f}pp below threshold ({PROBABILITY_DELTA_THRESHOLD}pp)")
         elif trade_result["reason"] == "insufficient_funds":
             print(f"    💸 TOO EXPENSIVE: Need ${trade_result['needed']:.2f}, have ${trade_result['available']:.2f}")
-            print(f"    📊 Position: {trade_result['current_pos']} → {trade_result['target_pos']} (want Δ{trade_result['adjustment']})")
+            print(f"    📊 YES: {trade_result['current_yes']:.2f}→{trade_result['target_yes']:.2f} | NO: {trade_result['current_no']:.2f}→{trade_result['target_no']:.2f}")
         elif trade_result["reason"] == "adjustment_too_small":
             print(f"    📏 TOO SMALL: Adjustment {trade_result['adjustment']} below minimum")
-            print(f"    📊 Position: {trade_result['current_pos']} → {trade_result['target_pos']} (want Δ{trade_result['adjustment']})")
+            print(f"    📊 YES: {trade_result['current_yes']:.2f}→{trade_result['target_yes']:.2f} | NO: {trade_result['current_no']:.2f}→{trade_result['target_no']:.2f}")
         elif trade_result["reason"] == "position_aligned":
             print(f"    ✅ ALIGNED: Position already optimal")
-            print(f"    📊 Position: {trade_result['current_pos']} → {trade_result['target_pos']} (Δ{trade_result['adjustment']})")
+            print(f"    📊 YES: {trade_result['current_yes']:.2f}→{trade_result['target_yes']:.2f} | NO: {trade_result['current_no']:.2f}→{trade_result['target_no']:.2f}")
         
         # Save data
         timestamp = datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')

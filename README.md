@@ -1,66 +1,100 @@
-# BTC Polymarket Scraper
+# Polyscraper - Polymarket Continuous Trading Bot
 
-Automated scraper for Bitcoin hourly markets on Polymarket.
+An automated cryptocurrency prediction market trading system that runs continuously on AWS EC2, analyzing crypto price movements and executing trades on Polymarket.
 
-## Features
+## 🎯 **How It Works**
 
-- **Automated Data Collection**: Scrapes current market data every minute
-- **Market List Updates**: Refreshes the list of available markets every other day
-- **GitHub Actions Integration**: Runs automatically on GitHub's servers
-- **Data Filtering**: Only includes markets from July 18, 2025 onwards
-- **Data Validation**: Rejects markets with missing or invalid data
+The bot continuously cycles through Bitcoin, Ethereum, Solana, and XRP markets:
 
-## Files
+1. **Price Analysis**: Fetches real-time crypto prices from Binance
+2. **Market Data**: Gets current Polymarket odds using the price API  
+3. **ML Predictions**: Uses LightGBM models trained on price movements and order flow
+4. **Dynamic Trading**: Adjusts positions based on prediction confidence and available bankroll
+5. **Risk Management**: Implements minimum order sizes, spread checks, and position limits
 
-- `polyscraper.py` - Main scraper script
-- `btc_polydata.csv` - Live market data (updated every minute)
-- `btc_polymarkets.csv` - Available markets list (updated every other day)
-- `.github/workflows/polymarket-scraper.yml` - GitHub Actions workflow
-- `requirements.txt` - Python dependencies
+## 🚀 **Key Features**
 
-## Setup
+- **Continuous Operation**: Runs 24/7 with ~2-second cycle times
+- **Dynamic Position Sizing**: Trades proportional to prediction confidence
+- **Proper Price Tracking**: Uses exact hour-start prices for accurate ratios
+- **Parallel API Calls**: Optimized for speed with concurrent bid/ask fetching
+- **Rate Limiting**: Respects API limits for both Binance and Polymarket
+- **Comprehensive Logging**: Detailed timing and position tracking
 
-1. **Push to GitHub**: Push this repository to your GitHub account
+## 📊 **Trading Logic**
 
-2. **Enable Actions**: Go to your GitHub repository > Actions tab and enable GitHub Actions if prompted
+- **Entry Threshold**: ±3 percentage points delta between prediction and market
+- **Position Sizing**: `bankroll_fraction × bankroll × |delta|`  
+- **Risk Limits**: Maximum 80% of bankroll exposure
+- **Order Management**: Cancels previous orders each cycle for maximum dynamism
 
-3. **Manual Test**: Test the workflow manually:
-   - Go to Actions tab
-   - Click "Polymarket Bitcoin Scraper"
-   - Click "Run workflow"
+## 🔧 **Installation**
 
-## How it Works
+1. **Clone and Setup**:
+   ```bash
+   git clone <repo>
+   cd Polyscraper
+   python -m venv venv
+   source venv/bin/activate  # or `venv\Scripts\activate` on Windows
+   pip install -r requirements.txt
+   ```
 
-### Every Minute
-- Downloads the current order book for the active Bitcoin hourly market
-- Extracts best bid and ask prices
-- Appends new data to `btc_polydata.csv`
+2. **Configure Credentials**:
+   ```bash
+   export POLYMARKET_PRIVATE_KEY="your_private_key"
+   export POLYMARKET_PROXY_ADDRESS="your_proxy_address"
+   ```
 
-### Every Other Day (2 AM UTC)
-- Fetches all available markets from Polymarket
-- Filters for Bitcoin hourly markets
-- Updates `btc_polymarkets.csv` with the latest market list
+3. **Run Locally**:
+   ```bash
+   python3 polytrader_continuous.py
+   ```
 
-## Local Usage
+## 🔰 **Deployment (AWS EC2)**
 
-```bash
-# Run data scraping
-python3 polyscraper.py
+1. **Setup EC2 Instance** with the repository
+2. **Install Dependencies** and configure environment
+3. **Deploy as System Service**:
+   ```bash
+   sudo cp polytrader.service /etc/systemd/system/
+   sudo systemctl daemon-reload
+   sudo systemctl enable polytrader
+   sudo systemctl start polytrader
+   ```
 
-# Update markets list only
-python3 polyscraper.py --update-markets
+4. **Monitor Status**:
+   ```bash
+   sudo systemctl status polytrader
+   sudo journalctl -u polytrader -f
+   ```
+
+## 📁 **Project Structure**
+
+```
+Polyscraper/
+├── polytrader_continuous.py    # 🎯 Main trading bot
+├── polytrader.service          # ⚙️ Systemd service config  
+├── app.py                      # 📱 Flask web dashboard
+├── *_lgbm.txt                  # 🤖 Pre-trained ML models
+├── requirements.txt            # 📦 Python dependencies
+└── README.md                   # 📖 This file
 ```
 
-## Data Format
+## 📈 **Performance**
 
-### btc_polydata.csv
-```
-timestamp,market_name,token_id,best_bid,best_ask
-2025-01-18 01:37:24,Will Bitcoin be up or down on January 18 at 5 PM ET?,123456,0.45,0.55
-```
+- **Cycle Time**: ~2 seconds per full cycle (4 currencies)
+- **API Efficiency**: Parallel bid/ask calls, intelligent caching
+- **Uptime**: Designed for 24/7 operation with automatic restarts
+- **Accuracy**: Uses exact Binance hour-start prices for ML features
 
-### btc_polymarkets.csv
-```
-market_name,token_id,date_time,market_slug
-Will Bitcoin be up or down on January 18 at 5 PM ET?,123456,2025-01-18 17:00 EDT,bitcoin-up-or-down-january-18-5-pm-et
-```
+## ⚠️ **Risk Disclosure**
+
+This is experimental trading software. Only use with funds you can afford to lose. Past performance does not guarantee future results. Review all code and test thoroughly before live deployment.
+
+## 🛠️ **Development**
+
+- **Languages**: Python 3.8+
+- **ML Framework**: LightGBM
+- **APIs**: Binance (price data), Polymarket (trading)
+- **Database**: SQLite for data storage
+- **Deployment**: AWS EC2 with systemd
