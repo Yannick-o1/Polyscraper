@@ -291,12 +291,26 @@ def calculate_model_prediction(currency, current_price, ofi, market_price):
                     recent_data.append(data_point)
             
             if len(recent_data) >= 5:
-                # Extract spot prices from last 20 minutes
-                recent_prices = [data_point[5] for data_point in recent_data]
-                price_series = pd.Series(recent_prices)
-                log_returns = np.log(price_series).diff()
-                rolling_vol = log_returns.std()
-                vol = rolling_vol * np.sqrt(60) if not pd.isna(rolling_vol) and rolling_vol > 0 else 0.01
+                # Sample data to ~1-minute intervals to get proper volatility calculation
+                # Group by minute and take the last price in each minute
+                minute_prices = {}
+                for data_point in recent_data:
+                    try:
+                        data_timestamp = datetime.strptime(data_point[0], '%Y-%m-%d %H:%M:%S').replace(tzinfo=UTC)
+                        minute_key = data_timestamp.strftime('%Y-%m-%d %H:%M')  # Group by minute
+                        minute_prices[minute_key] = data_point[5]  # Keep latest price for each minute
+                    except:
+                        continue
+                
+                if len(minute_prices) >= 3:
+                    # Use minute-level prices for volatility calculation
+                    prices_by_minute = [minute_prices[key] for key in sorted(minute_prices.keys())]
+                    price_series = pd.Series(prices_by_minute)
+                    log_returns = np.log(price_series).diff()
+                    rolling_vol = log_returns.std()
+                    vol = rolling_vol * np.sqrt(60) if not pd.isna(rolling_vol) and rolling_vol > 0 else 0.01
+                else:
+                    vol = 0.01
             else:
                 vol = 0.01
         else:
@@ -451,12 +465,26 @@ def write_to_database(currency):
                         recent_data.append(data_point)
                 
                 if len(recent_data) >= 5:
-                    # Extract spot prices from last 20 minutes
-                    recent_prices = [data_point[5] for data_point in recent_data]
-                    price_series = pd.Series(recent_prices)
-                    log_returns = np.log(price_series).diff()
-                    rolling_vol = log_returns.std()
-                    vol = rolling_vol * np.sqrt(60) if not pd.isna(rolling_vol) and rolling_vol > 0 else 0.01
+                    # Sample data to ~1-minute intervals to get proper volatility calculation
+                    # Group by minute and take the last price in each minute
+                    minute_prices = {}
+                    for data_point in recent_data:
+                        try:
+                            data_timestamp = datetime.strptime(data_point[0], '%Y-%m-%d %H:%M:%S').replace(tzinfo=UTC)
+                            minute_key = data_timestamp.strftime('%Y-%m-%d %H:%M')  # Group by minute
+                            minute_prices[minute_key] = data_point[5]  # Keep latest price for each minute
+                        except:
+                            continue
+                    
+                    if len(minute_prices) >= 3:
+                        # Use minute-level prices for volatility calculation
+                        prices_by_minute = [minute_prices[key] for key in sorted(minute_prices.keys())]
+                        price_series = pd.Series(prices_by_minute)
+                        log_returns = np.log(price_series).diff()
+                        rolling_vol = log_returns.std()
+                        vol = rolling_vol * np.sqrt(60) if not pd.isna(rolling_vol) and rolling_vol > 0 else 0.01
+                    else:
+                        vol = 0.01
                 else:
                     vol = 0.01
             else:
