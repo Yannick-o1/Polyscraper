@@ -134,7 +134,6 @@ def get_hour_start_price(currency, current_price):
 def get_market_data(currency):
     """Get current market token IDs and prices."""
     try:
-        wait_for_rate_limit()
         markets_file = f"{currency}_polymarkets.csv"
         
         if not os.path.exists(markets_file):
@@ -144,9 +143,13 @@ def get_market_data(currency):
         if df.empty:
             return None, None, None
             
-        # Get most recent market
+        # Get most recent market - use correct column names
         latest_market = df.iloc[-1]
-        return latest_market['yes_token_id'], latest_market['no_token_id'], latest_market['market_name']
+        token_id_yes = str(int(latest_market['token_id_yes']))
+        token_id_no = str(int(latest_market['token_id_no']))
+        market_name = latest_market['market_name']
+        
+        return token_id_yes, token_id_no, market_name
         
     except Exception as e:
         print(f"❌ Market data error for {currency}: {e}")
