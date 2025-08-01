@@ -656,6 +656,10 @@ def continuous_trading_loop():
             # Move to next currency for next cycle
             currency_index = (currency_index + 1) % len(currencies)
             
+            # Show portfolio summary every 20 cycles
+            if MOCK_TRADING_ENABLED and cycle_count % 20 == 0:
+                display_mock_portfolio_summary()
+            
             print("\n" + "─"*50)  # Clear separator between cycles
             
             # Sleep until next cycle
@@ -782,7 +786,8 @@ def execute_mock_trading(currency, prediction, market_price, spot_price):
         delta = prediction - market_price
         
         # Get current position for this currency
-        position = state.mock_positions.get(currency, {'direction': None, 'shares': 0, 'avg_cost': 0})
+        old_position = state.mock_positions.get(currency, {'direction': None, 'shares': 0, 'avg_cost': 0}).copy()
+        position = state.mock_positions.get(currency, {'direction': None, 'shares': 0, 'avg_cost': 0}).copy()
         
         # Calculate current portfolio value (mark-to-market)
         total_pos_value = 0
@@ -808,6 +813,13 @@ def execute_mock_trading(currency, prediction, market_price, spot_price):
         
         portfolio_value = state.mock_available_cash + total_pos_value
         
+        # Debug: Show current state
+        if old_position['shares'] > 0:
+            old_pos_value = old_position['shares'] * (market_price if old_position['direction'] == 'UP' else (1 - market_price))
+            print(f"    💰 Mock {currency.upper()}: Delta={delta:+.1%} | Current: {old_position['shares']:.2f} {old_position['direction']} = ${old_pos_value:.2f}")
+        else:
+            print(f"    💰 Mock {currency.upper()}: Delta={delta:+.1%} | Current: No position")
+        
         # Determine target position using Kelly criterion
         target_direction = None
         target_value = 0
@@ -816,6 +828,9 @@ def execute_mock_trading(currency, prediction, market_price, spot_price):
             target_direction = 'UP' if delta > 0 else 'DOWN'
             target_value = abs(delta) * MOCK_KELLY_FRACTION * portfolio_value
             target_value = min(target_value, portfolio_value * 0.1)  # Cap at 10% of portfolio
+            print(f"       🎯 Target: {target_direction} | Value: ${target_value:.2f} | Portfolio: ${portfolio_value:.2f}")
+        else:
+            print(f"       🎯 Target: FLAT (delta {delta:+.1%} < threshold {MOCK_THETA:.1%})")
         
         # Calculate position adjustment needed
         trade_pnl = 0
@@ -891,10 +906,22 @@ def execute_mock_trading(currency, prediction, market_price, spot_price):
                                 target_direction if target_direction else 'FLAT', 
                                 amount, action, delta, market_price, prediction)
         
-        # Log significant actions
+        # Show the trade result with detailed before/after
         if action != "HOLD":
-            print(f"    💰 Mock {action}: ${amount:.2f} @ {market_price:.1%} | "
-                  f"Bankroll: ${final_bankroll:.2f} ({return_pct:+.1f}%)")
+            new_pos = state.mock_positions.get(currency, {'direction': None, 'shares': 0, 'avg_cost': 0})
+            
+            print(f"       📋 {action} | Amount: ${amount:.2f} @ {market_price:.1%}")
+            print(f"       📊 Before: {old_position['shares']:.2f} {old_position['direction'] or 'FLAT'} @ ${old_position['avg_cost']:.3f}")
+            print(f"       📊 After:  {new_pos['shares']:.2f} {new_pos['direction'] or 'FLAT'} @ ${new_pos['avg_cost']:.3f}")
+            print(f"       💵 Cash: ${state.mock_available_cash:.2f} | Portfolio: ${final_bankroll:.2f} ({return_pct:+.1f}%)")
+        else:
+            # For HOLD, show current position
+            pos = state.mock_positions.get(currency, {'direction': None, 'shares': 0, 'avg_cost': 0})
+            if pos['shares'] > 0:
+                pos_value = pos['shares'] * (market_price if pos['direction'] == 'UP' else (1 - market_price))
+                print(f"       💤 HOLD | {pos['shares']:.2f} {pos['direction']} @ ${pos['avg_cost']:.3f} = ${pos_value:.2f}")
+            else:
+                print(f"       💤 HOLD | No position | Portfolio: ${final_bankroll:.2f} ({return_pct:+.1f}%)")
         
     except Exception as e:
         print(f"❌ Mock trading error for {currency}: {e}")
@@ -918,6 +945,51 @@ def save_mock_trading_result(currency, total_bankroll, return_pct, direction, am
     except Exception as e:
         print(f"❌ Error saving mock trading result for {currency}: {e}")
 
+def display_mock_portfolio_summary():
+    """Display comprehensive portfolio summary."""
+    if not MOCK_TRADING_ENABLED:
+        return
+        
+    try:
+        print(f"\n💼 MOCK PORTFOLIO SUMMARY")
+        print(f"   💵 Available Cash: ${state.mock_available_cash:.2f}")
+        
+        total_position_value = 0
+        active_positions = 0
+        
+        for currency, pos in state.mock_positions.items():
+            if pos['shares'] > 0:
+                active_positions += 1
+                # Get current market price for this currency
+                market_price = 0.5  # Default fallback
+                if currency in state.data_cache and state.data_cache[currency]:
+                    recent_data = state.data_cache[currency][-1]
+                    if len(recent_data) >= 6:
+                        best_bid, best_ask = recent_data[3], recent_data[4]
+                        if best_bid is not None and best_ask is not None:
+                            market_price = (best_bid + best_ask) / 2
+                
+                pos_value = pos['shares'] * (market_price if pos['direction'] == 'UP' else (1 - market_price))
+                total_position_value += pos_value
+                
+                cost_basis = pos['shares'] * pos['avg_cost'] 
+                unrealized_pnl = pos_value - cost_basis
+                
+                print(f"   📈 {currency.upper()}: {pos['shares']:.2f} {pos['direction']} @ ${pos['avg_cost']:.3f} | "
+                      f"Value: ${pos_value:.2f} | P&L: ${unrealized_pnl:+.2f}")
+        
+        total_portfolio = state.mock_available_cash + total_position_value
+        total_return_pct = ((total_portfolio - MOCK_INITIAL_BANKROLL) / MOCK_INITIAL_BANKROLL) * 100
+        
+        if active_positions == 0:
+            print("   📭 No active positions")
+        
+        print(f"   🏦 Total Portfolio: ${total_portfolio:.2f} ({total_return_pct:+.1f}%) | Positions: {active_positions}")
+        print("━" * 60)
+        
+    except Exception as e:
+        print(f"❌ Error displaying portfolio summary: {e}")
+
 def check_hour_outcomes():
     """Check if hour has changed and calculate UP/DOWN outcomes for previous hour."""
     current_hour_key = datetime.now(UTC).strftime('%Y-%m-%d_%H')
@@ -938,6 +1010,11 @@ def check_hour_outcomes():
         
         # Update last hour tracker
         state.last_hour_key = current_hour_key
+        
+        # Show portfolio summary on hour change
+        if MOCK_TRADING_ENABLED:
+            display_mock_portfolio_summary()
+        
         print("━" * 60)
 
 def calculate_currency_outcome(currency, previous_hour_key):
