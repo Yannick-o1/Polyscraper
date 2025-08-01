@@ -524,15 +524,17 @@ def trade_currency_once(currency):
             prediction_pct = p_up_prediction * 100
             market_pct = price_yes * 100
             
-            # Clean, informative output
+            # Determine action
             action = "BUY" if delta > PROBABILITY_DELTA_DEADZONE_THRESHOLD else "SELL" if delta < -PROBABILITY_DELTA_DEADZONE_THRESHOLD else "HOLD"
-            print(f"{currency.upper()}: {prediction_pct:.1f}% vs {market_pct:.1f}% (Δ{delta:+.1f}pp) → {action}", end=" ")
             
             if abs(delta) >= PROBABILITY_DELTA_DEADZONE_THRESHOLD:
                 manage_positions_fast(currency, delta, token_id_yes, token_id_no, 
                                     price_yes, price_no, best_bid_price, best_ask_price)
+                                    
+            # Clean output
+            print(f"  🔸 {currency.upper()}: {prediction_pct:.1f}% vs {market_pct:.1f}% (Δ{delta:+.1f}pp) → {action}")
         else:
-            print(f"{currency.upper()}: P=N/A M={price_yes*100:.1f}%", end=" ")
+            print(f"  🔸 {currency.upper()}: P=N/A M={price_yes*100:.1f}%")
         
         timings['trading_logic'] = time.time() - start
         
@@ -543,14 +545,14 @@ def trade_currency_once(currency):
         )
         state.data_cache[currency].append(data_point)
         
-        # Print timing summary for optimization
+        # Performance timing breakdown
         total_time = sum(timings.values())
-        print(f"[{total_time:.2f}s: M{timings['market_lookup']:.2f} B{timings['binance_data']:.2f} O{timings['order_book']:.2f} P{timings['prediction']:.2f} T{timings['trading_logic']:.2f}]")
+        print(f"    ⏱️ {total_time:.3f}s [Market:{timings['market_lookup']:.3f} | Binance:{timings['binance_data']:.3f} | OrderBook:{timings['order_book']:.3f} | Prediction:{timings['prediction']:.3f} | Trading:{timings['trading_logic']:.3f}]")
         
         return True
         
     except Exception as e:
-        print(f"❌ {currency.upper()} error: {e}")
+        print(f"  ❌ {currency.upper()} error: {e}")
         return False
 
 def continuous_trading_loop():
@@ -574,7 +576,9 @@ def continuous_trading_loop():
             cycle_start = time.time()
             cycle_count += 1
             
-            print(f"\n[Cycle {cycle_count}] ", end="")
+            # Clean timestamp with emojis
+            timestamp = datetime.now(UTC).strftime('%H:%M:%S')
+            print(f"\n⚡ {timestamp} [Cycle {cycle_count}]")
             
             # Trade each currency in sequence
             for i, currency in enumerate(currencies):
@@ -584,7 +588,7 @@ def continuous_trading_loop():
                 success = trade_currency_once(currency)
                 
                 if not success:
-                    print(f"{currency.upper()}:SKIP ", end="")
+                    print(f"  ❌ {currency.upper()}: SKIPPED")
                 
                 # Small delay between currencies to prevent overwhelming APIs
                 if i < len(currencies) - 1:  # Don't delay after last currency
@@ -598,7 +602,7 @@ def continuous_trading_loop():
                 cycle_elapsed = CYCLE_DELAY_SECONDS
             
             # Show cycle performance
-            print(f"| {cycle_elapsed:.1f}s total")
+            print(f"  📈 Total cycle time: {cycle_elapsed:.1f}s")
             
     except KeyboardInterrupt:
         print(f"\n🛑 Stopping continuous trading...")
