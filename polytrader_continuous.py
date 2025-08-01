@@ -61,6 +61,12 @@ CYCLE_DELAY_SECONDS = 2.0
 # DB_WRITE_INTERVAL_SECONDS = 60  # Removed - now writing every cycle
 API_CALLS_PER_MINUTE = 80
 
+# Mock trading parameters
+MOCK_TRADING_ENABLED = True
+MOCK_INITIAL_BANKROLL = 100.0
+MOCK_KELLY_FRACTION = 0.5
+MOCK_THETA = 0.03  # 3% minimum delta threshold
+
 # Environment
 TRADING_ENABLED = True
 POLYMARKET_PRIVATE_KEY = os.getenv("POLYMARKET_PRIVATE_KEY")
@@ -78,6 +84,12 @@ class TradingState:
         self.api_call_times = deque(maxlen=1000)
         self.running = True
         self.hour_start_cache = {}  # Cache p_start prices
+        
+        # Mock trading state
+        if MOCK_TRADING_ENABLED:
+            self.mock_available_cash = MOCK_INITIAL_BANKROLL
+            self.mock_positions = {}  # {currency: {'direction': 'UP'/'DOWN', 'shares': float, 'avg_cost': float}}
+            self.mock_initialized = False
 
 state = TradingState()
 
@@ -543,6 +555,10 @@ def trade_currency_cycle(currency):
         )
         timings['trading'] = time.time() - start
         
+        # Step 6: Execute mock trading
+        if MOCK_TRADING_ENABLED:
+            execute_mock_trading(currency, prediction, market_price, spot_price)
+        
         # Log results
         
         if prediction:
@@ -597,6 +613,13 @@ def initialize_system():
         except Exception as e:
             print(f"❌ Error loading {currency.upper()} model: {e}")
     
+    # Initialize mock trading
+    if MOCK_TRADING_ENABLED:
+        print("💰 Initializing mock trading system...")
+        initialize_mock_trading()
+        state.mock_initialized = True
+        print(f"✅ Mock trading ready with ${MOCK_INITIAL_BANKROLL} bankroll")
+    
     print("🎯 System ready for continuous trading!")
 
 def continuous_trading_loop():
@@ -607,6 +630,8 @@ def continuous_trading_loop():
     
     print(f"\n🔄 Starting continuous loop: {' → '.join(c.upper() for c in currencies)}")
     print(f"⏱️ Cycle delay: {CYCLE_DELAY_SECONDS}s | 💾 DB writes: Every cycle")
+    if MOCK_TRADING_ENABLED:
+        print(f"💰 Mock trading: ${MOCK_INITIAL_BANKROLL} bankroll | Kelly: {MOCK_KELLY_FRACTION*100:.0f}% | Theta: {MOCK_THETA*100:.0f}%")
     print("-" * 60)
     
     try:
@@ -720,6 +745,178 @@ def get_current_position(token_id_yes, token_id_no):
     except Exception:
         # Don't let position lookup errors stop trading
         return 0, 0
+
+def initialize_mock_trading():
+    """Initialize mock trading database tables."""
+    if not MOCK_TRADING_ENABLED:
+        return
+        
+    for currency in CURRENCY_CONFIG.keys():
+        try:
+            with sqlite3.connect(f"{currency}_polyscraper.db") as conn:
+                cursor = conn.cursor()
+                cursor.execute(f'''
+                    CREATE TABLE IF NOT EXISTS mock_trading (
+                        timestamp TEXT,
+                        total_bankroll REAL,
+                        return_pct REAL,
+                        currency TEXT,
+                        direction TEXT,
+                        amount REAL,
+                        action TEXT,
+                        delta REAL,
+                        market_price REAL,
+                        prediction REAL
+                    )
+                ''')
+        except Exception as e:
+            print(f"❌ Error initializing mock trading DB for {currency}: {e}")
+
+def execute_mock_trading(currency, prediction, market_price, spot_price):
+    """Execute mock trading based on model prediction vs market price."""
+    if not MOCK_TRADING_ENABLED or not prediction:
+        return
+        
+    try:
+        # Calculate delta (edge)
+        delta = prediction - market_price
+        
+        # Get current position for this currency
+        position = state.mock_positions.get(currency, {'direction': None, 'shares': 0, 'avg_cost': 0})
+        
+        # Calculate current portfolio value (mark-to-market)
+        total_pos_value = 0
+        for curr, pos in state.mock_positions.items():
+            if pos['shares'] > 0:
+                # Use current market prices for mark-to-market
+                if curr == currency:
+                    curr_market_price = market_price
+                else:
+                    # For other currencies, try to get recent market price from cache
+                    curr_market_price = 0.5  # Default fallback
+                    if curr in state.data_cache and state.data_cache[curr]:
+                        recent_data = state.data_cache[curr][-1]  # Most recent data
+                        if len(recent_data) >= 6:  # best_bid, best_ask are at indices 3,4
+                            best_bid, best_ask = recent_data[3], recent_data[4]
+                            if best_bid is not None and best_ask is not None:
+                                curr_market_price = (best_bid + best_ask) / 2
+                    
+                if pos['direction'] == 'UP':
+                    total_pos_value += pos['shares'] * curr_market_price
+                elif pos['direction'] == 'DOWN':
+                    total_pos_value += pos['shares'] * (1 - curr_market_price)
+        
+        portfolio_value = state.mock_available_cash + total_pos_value
+        
+        # Determine target position using Kelly criterion
+        target_direction = None
+        target_value = 0
+        
+        if abs(delta) >= MOCK_THETA:
+            target_direction = 'UP' if delta > 0 else 'DOWN'
+            target_value = abs(delta) * MOCK_KELLY_FRACTION * portfolio_value
+            target_value = min(target_value, portfolio_value * 0.1)  # Cap at 10% of portfolio
+        
+        # Calculate position adjustment needed
+        trade_pnl = 0
+        action = "HOLD"
+        amount = 0
+        
+        # Close existing position if direction changed or going flat
+        if position['direction'] and position['direction'] != target_direction:
+            # Sell existing position
+            price = market_price if position['direction'] == 'UP' else (1 - market_price)
+            cash_received = position['shares'] * price
+            cost_of_shares = position['shares'] * position['avg_cost']
+            trade_pnl = cash_received - cost_of_shares
+            
+            state.mock_available_cash += cash_received
+            amount = position['shares']
+            action = f"SELL {position['direction']}"
+            
+            # Clear position
+            position = {'direction': None, 'shares': 0, 'avg_cost': 0}
+        
+        # Open new position if target direction is set
+        if target_direction and target_value > 0.01:
+            price = market_price if target_direction == 'UP' else (1 - market_price)
+            shares_to_buy = target_value / price if price > 0 else 0
+            cost = shares_to_buy * price
+            
+            if cost <= state.mock_available_cash and shares_to_buy > 0.01:
+                state.mock_available_cash -= cost
+                
+                if position['direction'] == target_direction:
+                    # Add to existing position
+                    total_cost = (position['shares'] * position['avg_cost']) + cost
+                    position['shares'] += shares_to_buy
+                    position['avg_cost'] = total_cost / position['shares']
+                    action = f"ADD {target_direction}"
+                else:
+                    # New position
+                    position = {'direction': target_direction, 'shares': shares_to_buy, 'avg_cost': price}
+                    action = f"BUY {target_direction}"
+                
+                amount = shares_to_buy
+        
+        # Update position
+        state.mock_positions[currency] = position
+        
+        # Calculate final portfolio value
+        final_pos_value = 0
+        for curr, pos in state.mock_positions.items():
+            if pos['shares'] > 0:
+                if curr == currency:
+                    curr_market_price = market_price
+                else:
+                    # For other currencies, try to get recent market price from cache
+                    curr_market_price = 0.5  # Default fallback
+                    if curr in state.data_cache and state.data_cache[curr]:
+                        recent_data = state.data_cache[curr][-1]  # Most recent data
+                        if len(recent_data) >= 6:  # best_bid, best_ask are at indices 3,4
+                            best_bid, best_ask = recent_data[3], recent_data[4]
+                            if best_bid is not None and best_ask is not None:
+                                curr_market_price = (best_bid + best_ask) / 2
+                    
+                if pos['direction'] == 'UP':
+                    final_pos_value += pos['shares'] * curr_market_price
+                elif pos['direction'] == 'DOWN':
+                    final_pos_value += pos['shares'] * (1 - curr_market_price)
+        
+        final_bankroll = state.mock_available_cash + final_pos_value
+        return_pct = ((final_bankroll - MOCK_INITIAL_BANKROLL) / MOCK_INITIAL_BANKROLL) * 100
+        
+        # Save to database
+        save_mock_trading_result(currency, final_bankroll, return_pct, 
+                                target_direction if target_direction else 'FLAT', 
+                                amount, action, delta, market_price, prediction)
+        
+        # Log significant actions
+        if action != "HOLD":
+            print(f"    💰 Mock {action}: ${amount:.2f} @ {market_price:.1%} | "
+                  f"Bankroll: ${final_bankroll:.2f} ({return_pct:+.1f}%)")
+        
+    except Exception as e:
+        print(f"❌ Mock trading error for {currency}: {e}")
+
+def save_mock_trading_result(currency, total_bankroll, return_pct, direction, amount, action, delta, market_price, prediction):
+    """Save mock trading result to database."""
+    if not MOCK_TRADING_ENABLED:
+        return
+        
+    try:
+        timestamp = datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')
+        
+        with sqlite3.connect(f"{currency}_polyscraper.db") as conn:
+            cursor = conn.cursor()
+            cursor.execute(f'''
+                INSERT INTO mock_trading 
+                (timestamp, total_bankroll, return_pct, currency, direction, amount, action, delta, market_price, prediction)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (timestamp, total_bankroll, return_pct, currency, direction, amount, action, delta, market_price, prediction))
+            
+    except Exception as e:
+        print(f"❌ Error saving mock trading result for {currency}: {e}")
 
 def check_hour_outcomes():
     """Check if hour has changed and calculate UP/DOWN outcomes for previous hour."""
