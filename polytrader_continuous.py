@@ -226,9 +226,43 @@ def write_cached_data_to_db(currency):
         ''', latest_data)
         
         conn.commit()
-        conn.close()
         
-        print(f"📝 {currency.upper()}: DB written ({len(state.data_cache[currency])} cached points)")
+        # Extract features for display
+        timestamp, market_name, token_id, best_bid, best_ask, spot_price, ofi, p_up_prediction = latest_data
+        
+        # Calculate display features (same as in calculate_prediction)
+        try:
+            # Get p_start for r calculation
+            current_hour_start_utc = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+            cursor.execute(f"SELECT {config['db_column']} FROM polydata WHERE timestamp >= ? ORDER BY timestamp ASC LIMIT 1", 
+                          (current_hour_start_utc.strftime('%Y-%m-%d %H:%M:%S'),))
+            p_start_row = cursor.fetchone()
+            p_start = p_start_row[0] if p_start_row else spot_price
+            
+            # Calculate features
+            r = (spot_price / p_start - 1) if p_start > 0 else 0
+            current_minute = datetime.now(UTC).minute
+            tau = max(1 - (current_minute / 60), 0.01)
+            
+            # Get volatility from recent data
+            cursor.execute(f"SELECT {config['db_column']} FROM polydata ORDER BY timestamp DESC LIMIT 20")
+            recent_prices = [row[0] for row in cursor.fetchall() if row[0] is not None]
+            
+            if len(recent_prices) >= 2:
+                log_returns = np.diff(np.log(recent_prices))
+                vol = np.std(log_returns) * np.sqrt(60) if len(log_returns) > 1 else 0.01
+            else:
+                vol = 0.01
+                
+            conn.close()
+            
+            print(f"📝 {currency.upper()}: DB written ({len(state.data_cache[currency])} cached points)")
+            print(f"    📊 Features: ofi={ofi:.4f} | r={r:.4f} | p_start=${p_start:.2f} | vol={vol:.4f} | tau={tau:.3f}")
+            
+        except Exception as feature_e:
+            conn.close()
+            print(f"📝 {currency.upper()}: DB written ({len(state.data_cache[currency])} cached points)")
+            print(f"    ⚠️ Feature display error: {feature_e}")
         
     except Exception as e:
         print(f"❌ DB write error for {currency}: {e}")
@@ -278,9 +312,9 @@ def init_database(currency):
 
 # --- Trading Functions ---
 def place_order(side, token_id, price, size_shares):
-    """Place order with rate limiting."""
+    """Place order with rate limiting and detailed outcome tracking."""
     if not state.polymarket_client or size_shares < MINIMUM_ORDER_SIZE_SHARES:
-        return False
+        return {"executed": False, "reason": "insufficient_size_or_client", "balance_issue": False}
     
     try:
         wait_for_rate_limit()
@@ -301,21 +335,18 @@ def place_order(side, token_id, price, size_shares):
         
         success = response.get('success', False)
         
-        # Only log successful orders or specific errors, not balance issues
         if success:
-            return True
+            return {"executed": True, "reason": "success", "balance_issue": False, "price": order_price, "size": size_shares}
         elif 'not enough balance' in str(response):
-            return False  # Silent failure for balance issues
+            return {"executed": False, "reason": "insufficient_balance", "balance_issue": True}
         else:
-            print(f"      ❌ Order error: {response}")
-            return False
+            return {"executed": False, "reason": str(response), "balance_issue": False}
         
     except Exception as e:
         if 'not enough balance' in str(e):
-            return False  # Silent failure for balance issues
+            return {"executed": False, "reason": "insufficient_balance", "balance_issue": True}
         else:
-            print(f"      ❌ Order error: {e}")
-            return False
+            return {"executed": False, "reason": str(e), "balance_issue": False}
 
 def get_binance_data_and_ofi(currency):
     """Get live price and OFI with caching and rate limiting."""
@@ -458,21 +489,30 @@ def calculate_prediction(currency, historical_data, current_price, ofi):
         return None
 
 def manage_positions_fast(currency, delta, token_id_yes, token_id_no, price_yes, price_no, best_bid_yes, best_ask_yes):
-    """Fast position management without full state lookup."""
+    """Fast position management with detailed execution tracking."""
     if not state.polymarket_client or abs(delta) < PROBABILITY_DELTA_DEADZONE_THRESHOLD:
-        return
+        return {"executed": False, "reason": "no_client_or_small_delta", "balance_issue": False}
     
     # Simplified position management for speed
-    # In a real implementation, you'd cache position state
     target_direction = "UP" if delta > 0 else "DOWN"
     target_size = min(abs(delta) * 20, 50)  # Simple sizing
     
     if target_direction == "UP" and price_yes > 0:
         buy_price = min(0.99, best_bid_yes + 0.01)
-        place_order(BUY, token_id_yes, buy_price, target_size)
+        result = place_order(BUY, token_id_yes, buy_price, target_size)
+        result["direction"] = "UP"
+        result["target_size"] = target_size
+        result["target_price"] = buy_price
+        return result
     elif target_direction == "DOWN" and price_no > 0:
         buy_price = min(0.99, (1 - best_ask_yes) + 0.01)
-        place_order(BUY, token_id_no, buy_price, target_size)
+        result = place_order(BUY, token_id_no, buy_price, target_size)
+        result["direction"] = "DOWN"
+        result["target_size"] = target_size
+        result["target_price"] = buy_price
+        return result
+    else:
+        return {"executed": False, "reason": "invalid_prices", "balance_issue": False}
 
 # --- Main Trading Loop ---
 def trade_currency_once(currency):
@@ -519,6 +559,8 @@ def trade_currency_once(currency):
         
         # Step 5: Trading logic
         start = time.time()
+        trade_result = None
+        
         if p_up_prediction is not None and TRADING_ENABLED:
             delta = (p_up_prediction - price_yes) * 100
             prediction_pct = p_up_prediction * 100
@@ -528,7 +570,7 @@ def trade_currency_once(currency):
             action = "BUY" if delta > PROBABILITY_DELTA_DEADZONE_THRESHOLD else "SELL" if delta < -PROBABILITY_DELTA_DEADZONE_THRESHOLD else "HOLD"
             
             if abs(delta) >= PROBABILITY_DELTA_DEADZONE_THRESHOLD:
-                manage_positions_fast(currency, delta, token_id_yes, token_id_no, 
+                trade_result = manage_positions_fast(currency, delta, token_id_yes, token_id_no, 
                                     price_yes, price_no, best_bid_price, best_ask_price)
                                     
             # Clean output
@@ -548,6 +590,17 @@ def trade_currency_once(currency):
         # Performance timing breakdown
         total_time = sum(timings.values())
         print(f"    ⏱️ {total_time:.3f}s [Market:{timings['market_lookup']:.3f} | Binance:{timings['binance_data']:.3f} | OrderBook:{timings['order_book']:.3f} | Prediction:{timings['prediction']:.3f} | Trading:{timings['trading_logic']:.3f}]")
+        
+        # Trade execution outcome
+        if trade_result:
+            if trade_result["executed"]:
+                print(f"    💰 EXECUTED: {trade_result['direction']} ${trade_result['target_price']:.2f} × {trade_result['target_size']:.1f} shares")
+            elif trade_result["balance_issue"]:
+                print(f"    💸 SKIPPED: Insufficient balance (need ~${trade_result.get('target_size', 0) * trade_result.get('target_price', 0):.2f})")
+            else:
+                print(f"    ❌ FAILED: {trade_result['reason']}")
+        elif TRADING_ENABLED and p_up_prediction is not None:
+            print(f"    ⏸️ HOLD: Delta {delta:.1f}pp below threshold ({PROBABILITY_DELTA_DEADZONE_THRESHOLD}pp)")
         
         return True
         
