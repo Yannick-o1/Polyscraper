@@ -16,6 +16,7 @@ import time
 import threading
 from datetime import datetime, UTC, timedelta
 from collections import defaultdict, deque
+from zoneinfo import ZoneInfo
 
 # Polymarket imports
 try:
@@ -132,7 +133,7 @@ def get_hour_start_price(currency, current_price):
         return current_price
 
 def get_market_data(currency):
-    """Get current market token IDs and prices."""
+    """Get current market token IDs for the current hour."""
     try:
         markets_file = f"{currency}_polymarkets.csv"
         
@@ -142,9 +143,25 @@ def get_market_data(currency):
         df = pd.read_csv(markets_file)
         if df.empty:
             return None, None, None
-            
-        # Get most recent market - use correct column names
-        latest_market = df.iloc[-1]
+        
+        # Get current hour and convert to ET timezone for market matching
+        current_hour_utc = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+        et_tz = ZoneInfo("America/New_York")
+        target_hour_dt_et = current_hour_utc.astimezone(et_tz)
+        target_datetime_str = target_hour_dt_et.strftime('%Y-%m-%d %H:%M EDT')
+        
+        # Find market matching current hour
+        matching_rows = df[df['date_time'] == target_datetime_str]
+        
+        if matching_rows.empty:
+            print(f"⚠️ No market found for current hour: {target_datetime_str}")
+            # Fall back to most recent market as backup
+            latest_market = df.iloc[-1]
+            print(f"   Using fallback market: {latest_market['market_name']}")
+        else:
+            latest_market = matching_rows.iloc[0]
+            print(f"✅ Found current hour market: {latest_market['market_name']}")
+        
         token_id_yes = str(int(latest_market['token_id_yes']))
         token_id_no = str(int(latest_market['token_id_no']))
         market_name = latest_market['market_name']
