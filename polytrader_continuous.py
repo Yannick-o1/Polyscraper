@@ -232,12 +232,21 @@ def write_cached_data_to_db(currency):
         
         # Calculate display features (same as in calculate_prediction)
         try:
-            # Get p_start for r calculation
+            # Get p_start for r calculation - use a more robust approach
             current_hour_start_utc = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+            
+            # Try to get hour start price from current hour data
             cursor.execute(f"SELECT {config['db_column']} FROM polydata WHERE timestamp >= ? ORDER BY timestamp ASC LIMIT 1", 
                           (current_hour_start_utc.strftime('%Y-%m-%d %H:%M:%S'),))
             p_start_row = cursor.fetchone()
-            p_start = p_start_row[0] if p_start_row else spot_price
+            
+            if p_start_row and p_start_row[0] is not None:
+                p_start = p_start_row[0]
+            else:
+                # Fallback: get the most recent price from previous data
+                cursor.execute(f"SELECT {config['db_column']} FROM polydata WHERE {config['db_column']} IS NOT NULL ORDER BY timestamp DESC LIMIT 1")
+                fallback_row = cursor.fetchone()
+                p_start = fallback_row[0] if fallback_row and fallback_row[0] is not None else spot_price
             
             # Calculate features
             r = (spot_price / p_start - 1) if p_start > 0 else 0
@@ -245,7 +254,7 @@ def write_cached_data_to_db(currency):
             tau = max(1 - (current_minute / 60), 0.01)
             
             # Get volatility from recent data
-            cursor.execute(f"SELECT {config['db_column']} FROM polydata ORDER BY timestamp DESC LIMIT 20")
+            cursor.execute(f"SELECT {config['db_column']} FROM polydata WHERE {config['db_column']} IS NOT NULL ORDER BY timestamp DESC LIMIT 20")
             recent_prices = [row[0] for row in cursor.fetchall() if row[0] is not None]
             
             if len(recent_prices) >= 2:
@@ -292,21 +301,22 @@ def init_database(currency):
         )
     ''')
     
-    # Add columns if they don't exist
-    cursor.execute("PRAGMA table_info(polydata)")
-    columns = [column[1] for column in cursor.fetchall()]
+    # Add currency-specific columns if they don't exist
+    try:
+        cursor.execute(f'ALTER TABLE polydata ADD COLUMN {config["db_column"]} REAL')
+    except sqlite3.OperationalError:
+        pass  # Column already exists
     
-    if config['db_column'] not in columns:
-        cursor.execute(f"ALTER TABLE polydata ADD COLUMN {config['db_column']} REAL")
-    if 'ofi' not in columns:
-        cursor.execute("ALTER TABLE polydata ADD COLUMN ofi REAL")
-    if 'p_up_prediction' not in columns:
-        cursor.execute("ALTER TABLE polydata ADD COLUMN p_up_prediction REAL")
-    if 'outcome' not in columns:
-        cursor.execute("ALTER TABLE polydata ADD COLUMN outcome TEXT")
-    if currency != 'btc' and config['outcome_column'] not in columns:
-        cursor.execute(f"ALTER TABLE polydata ADD COLUMN {config['outcome_column']} TEXT")
-
+    try:
+        cursor.execute('ALTER TABLE polydata ADD COLUMN ofi REAL')
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+        
+    try:
+        cursor.execute('ALTER TABLE polydata ADD COLUMN p_up_prediction REAL')
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    
     conn.commit()
     conn.close()
 
@@ -489,23 +499,34 @@ def calculate_prediction(currency, historical_data, current_price, ofi):
         return None
 
 def manage_positions_fast(currency, delta, token_id_yes, token_id_no, price_yes, price_no, best_bid_yes, best_ask_yes):
-    """Fast position management with detailed execution tracking."""
+    """Fast position management with realistic sizing based on available balance."""
     if not state.polymarket_client or abs(delta) < PROBABILITY_DELTA_DEADZONE_THRESHOLD:
         return {"executed": False, "reason": "no_client_or_small_delta", "balance_issue": False}
     
-    # Simplified position management for speed
+    # Calculate realistic position size based on small balance
+    # With only $0.30, we need very small positions
     target_direction = "UP" if delta > 0 else "DOWN"
-    target_size = min(abs(delta) * 20, 50)  # Simple sizing
     
     if target_direction == "UP" and price_yes > 0:
         buy_price = min(0.99, best_bid_yes + 0.01)
+        # Calculate max affordable shares with available balance ($0.30)
+        max_affordable = 0.25 / buy_price  # Use $0.25 to leave some buffer
+        # Scale with delta but cap at affordable amount
+        target_size = min(abs(delta) * 0.05, max_affordable, 1.0)  # Much smaller sizing
+        
         result = place_order(BUY, token_id_yes, buy_price, target_size)
         result["direction"] = "UP"
         result["target_size"] = target_size
         result["target_price"] = buy_price
         return result
+        
     elif target_direction == "DOWN" and price_no > 0:
         buy_price = min(0.99, (1 - best_ask_yes) + 0.01)
+        # Calculate max affordable shares with available balance ($0.30)
+        max_affordable = 0.25 / buy_price  # Use $0.25 to leave some buffer
+        # Scale with delta but cap at affordable amount
+        target_size = min(abs(delta) * 0.05, max_affordable, 1.0)  # Much smaller sizing
+        
         result = place_order(BUY, token_id_no, buy_price, target_size)
         result["direction"] = "DOWN"
         result["target_size"] = target_size
