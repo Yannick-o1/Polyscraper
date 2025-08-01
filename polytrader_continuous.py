@@ -253,14 +253,24 @@ def write_cached_data_to_db(currency):
             current_minute = datetime.now(UTC).minute
             tau = max(1 - (current_minute / 60), 0.01)
             
-            # Get volatility from recent data
+            # Get volatility from recent data using rolling window
             cursor.execute(f"SELECT {config['db_column']} FROM polydata WHERE {config['db_column']} IS NOT NULL ORDER BY timestamp DESC LIMIT 20")
             recent_prices = [row[0] for row in cursor.fetchall() if row[0] is not None]
             
-            if len(recent_prices) >= 2:
+            if len(recent_prices) >= 20:
+                # Use rolling window like the original
+                price_series = pd.Series(recent_prices[::-1])  # Reverse to chronological order
+                log_returns = np.log(price_series).diff()
+                rolling_vol = log_returns.rolling(window=20, min_periods=2).std()
+                vol = rolling_vol.iloc[-1] * np.sqrt(60) if not rolling_vol.empty and not pd.isna(rolling_vol.iloc[-1]) else 0.01
+            elif len(recent_prices) >= 2:
+                # Fallback for insufficient data
                 log_returns = np.diff(np.log(recent_prices))
                 vol = np.std(log_returns) * np.sqrt(60) if len(log_returns) > 1 else 0.01
             else:
+                vol = 0.01
+                
+            if pd.isna(vol) or vol <= 0:
                 vol = 0.01
                 
             conn.close()
