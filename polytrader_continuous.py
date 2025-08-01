@@ -300,14 +300,22 @@ def place_order(side, token_id, price, size_shares):
         response = state.polymarket_client.post_order(signed_order, OrderType.GTD)
         
         success = response.get('success', False)
-        symbol = "✅" if success else "❌"
-        print(f"      {symbol} {side} {size_shares:.1f} @ ${order_price:.2f}")
         
-        return success
+        # Only log successful orders or specific errors, not balance issues
+        if success:
+            return True
+        elif 'not enough balance' in str(response):
+            return False  # Silent failure for balance issues
+        else:
+            print(f"      ❌ Order error: {response}")
+            return False
         
     except Exception as e:
-        print(f"      ❌ Order error: {e}")
-        return False
+        if 'not enough balance' in str(e):
+            return False  # Silent failure for balance issues
+        else:
+            print(f"      ❌ Order error: {e}")
+            return False
 
 def get_binance_data_and_ofi(currency):
     """Get live price and OFI with caching and rate limiting."""
@@ -468,23 +476,35 @@ def manage_positions_fast(currency, delta, token_id_yes, token_id_no, price_yes,
 
 # --- Main Trading Loop ---
 def trade_currency_once(currency):
-    """Execute one trading cycle for a currency."""
+    """Execute one trading cycle for a currency with detailed timing."""
     try:
         config = CURRENCY_CONFIG[currency]
         timestamp = datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')
         
-        # Get market info
+        # Time each step for optimization
+        timings = {}
+        
+        # Step 1: Get market info
+        start = time.time()
         token_id_yes, token_id_no, market_name = get_current_market_token_ids(currency)
+        timings['market_lookup'] = time.time() - start
+        
         if not token_id_yes:
             return False
         
-        # Get live data
+        # Step 2: Get live data
+        start = time.time()
         spot_price, ofi = get_binance_data_and_ofi(currency)
+        timings['binance_data'] = time.time() - start
+        
         if spot_price is None:
             return False
         
-        # Get order book
+        # Step 3: Get order book
+        start = time.time()
         best_bid, best_ask = get_order_book(token_id_yes)
+        timings['order_book'] = time.time() - start
+        
         if not best_bid or not best_ask:
             return False
         
@@ -492,24 +512,29 @@ def trade_currency_once(currency):
         price_yes = (best_bid_price + best_ask_price) / 2
         price_no = 1 - price_yes
         
-        # Calculate prediction
+        # Step 4: Calculate prediction
+        start = time.time()
         p_up_prediction = calculate_prediction(currency, None, spot_price, ofi)
+        timings['prediction'] = time.time() - start
         
-        # Trading logic
+        # Step 5: Trading logic
+        start = time.time()
         if p_up_prediction is not None and TRADING_ENABLED:
             delta = (p_up_prediction - price_yes) * 100
             prediction_pct = p_up_prediction * 100
             market_pct = price_yes * 100
             
-            print(f"{currency.upper()}: P={prediction_pct:.1f}% M={market_pct:.1f}% Δ={delta:+.1f}pp", end=" ")
+            # Clean, informative output
+            action = "BUY" if delta > PROBABILITY_DELTA_DEADZONE_THRESHOLD else "SELL" if delta < -PROBABILITY_DELTA_DEADZONE_THRESHOLD else "HOLD"
+            print(f"{currency.upper()}: {prediction_pct:.1f}% vs {market_pct:.1f}% (Δ{delta:+.1f}pp) → {action}", end=" ")
             
             if abs(delta) >= PROBABILITY_DELTA_DEADZONE_THRESHOLD:
                 manage_positions_fast(currency, delta, token_id_yes, token_id_no, 
                                     price_yes, price_no, best_bid_price, best_ask_price)
-            else:
-                print("(hold)")
         else:
             print(f"{currency.upper()}: P=N/A M={price_yes*100:.1f}%", end=" ")
+        
+        timings['trading_logic'] = time.time() - start
         
         # Cache data for database writing
         data_point = (
@@ -517,6 +542,10 @@ def trade_currency_once(currency):
             spot_price, ofi, p_up_prediction
         )
         state.data_cache[currency].append(data_point)
+        
+        # Print timing summary for optimization
+        total_time = sum(timings.values())
+        print(f"[{total_time:.2f}s: M{timings['market_lookup']:.2f} B{timings['binance_data']:.2f} O{timings['order_book']:.2f} P{timings['prediction']:.2f} T{timings['trading_logic']:.2f}]")
         
         return True
         
@@ -537,6 +566,7 @@ def continuous_trading_loop():
     print(f"📊 Sequence: {' -> '.join(c.upper() for c in currencies)}")
     print(f"⏱️ Cycle delay: {CYCLE_DELAY_SECONDS}s")
     print(f"💾 DB writes: Every {DB_WRITE_INTERVAL_SECONDS}s per currency")
+    print(f"💰 Trading: {'ENABLED' if TRADING_ENABLED else 'DISABLED'}")
     print("-" * 80)
     
     try:
@@ -547,28 +577,27 @@ def continuous_trading_loop():
             print(f"\n[Cycle {cycle_count}] ", end="")
             
             # Trade each currency in sequence
-            for currency in currencies:
+            for i, currency in enumerate(currencies):
                 if not state.running:
                     break
                     
-                start_time = time.time()
                 success = trade_currency_once(currency)
-                elapsed = time.time() - start_time
                 
-                if success:
-                    print(f"({elapsed:.1f}s) ", end="")
-                else:
+                if not success:
                     print(f"{currency.upper()}:SKIP ", end="")
                 
                 # Small delay between currencies to prevent overwhelming APIs
-                time.sleep(0.5)
+                if i < len(currencies) - 1:  # Don't delay after last currency
+                    time.sleep(0.2)
             
             # Cycle timing control
             cycle_elapsed = time.time() - cycle_start
             if cycle_elapsed < CYCLE_DELAY_SECONDS:
                 sleep_time = CYCLE_DELAY_SECONDS - cycle_elapsed
                 time.sleep(sleep_time)
+                cycle_elapsed = CYCLE_DELAY_SECONDS
             
+            # Show cycle performance
             print(f"| {cycle_elapsed:.1f}s total")
             
     except KeyboardInterrupt:
