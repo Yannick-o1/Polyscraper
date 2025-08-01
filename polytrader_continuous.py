@@ -545,6 +545,49 @@ def manage_positions_fast(currency, delta, token_id_yes, token_id_no, price_yes,
     else:
         return {"executed": False, "reason": "invalid_prices", "balance_issue": False}
 
+def cancel_all_open_orders():
+    """Cancel all open orders to prevent overlapping and increase dynamism."""
+    if not state.polymarket_client:
+        return 0
+    
+    try:
+        wait_for_rate_limit()
+        
+        # Get all open orders
+        response = state.polymarket_client.get_orders()
+        
+        if not response or 'data' not in response:
+            return 0
+        
+        open_orders = [order for order in response['data'] if order.get('status') == 'LIVE']
+        
+        if not open_orders:
+            return 0
+        
+        cancelled_count = 0
+        
+        # Cancel each open order
+        for order in open_orders:
+            try:
+                wait_for_rate_limit()
+                cancel_response = state.polymarket_client.cancel_order(order['id'])
+                
+                if cancel_response.get('success', False):
+                    cancelled_count += 1
+                    
+            except Exception as e:
+                # Log individual order cancellation errors but continue
+                pass
+        
+        if cancelled_count > 0:
+            print(f"  🗑️ Cancelled {cancelled_count} open orders")
+        
+        return cancelled_count
+        
+    except Exception as e:
+        # Silently handle API errors - don't let order cancellation stop trading
+        return 0
+
 # --- Main Trading Loop ---
 def trade_currency_once(currency):
     """Execute one trading cycle for a currency with detailed timing."""
@@ -663,6 +706,10 @@ def continuous_trading_loop():
             # Clean timestamp with emojis
             timestamp = datetime.now(UTC).strftime('%H:%M:%S')
             print(f"\n⚡ {timestamp} [Cycle {cycle_count}]")
+            
+            # Cancel all open orders from previous cycles for maximum dynamism
+            if TRADING_ENABLED:
+                cancel_all_open_orders()
             
             # Trade each currency in sequence
             for i, currency in enumerate(currencies):
