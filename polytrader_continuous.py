@@ -101,15 +101,18 @@ def wait_for_rate_limit():
     state.api_call_times.append(now)
 
 def get_hour_start_price(currency, current_price):
-    """Get exact hour start price with efficient caching."""
+    """Get exact hour start price - cache the FIRST price we see each hour."""
     hour_key = datetime.now(UTC).strftime('%Y-%m-%d_%H')
     
+    # Check if we already have p_start cached for this hour
     if hour_key in state.hour_start_cache:
-        return state.hour_start_cache[hour_key].get(currency, current_price)
+        if currency in state.hour_start_cache[hour_key]:
+            return state.hour_start_cache[hour_key][currency]
+    else:
+        # Initialize cache for this hour
+        state.hour_start_cache[hour_key] = {}
     
-    # Initialize cache for this hour
-    state.hour_start_cache[hour_key] = {}
-    
+    # Try to get p_start from database first (if we have data from this hour)
     try:
         config = CURRENCY_CONFIG[currency]
         with sqlite3.connect(f"{currency}_polyscraper.db") as conn:
@@ -124,13 +127,20 @@ def get_hour_start_price(currency, current_price):
             """, (hour_start.strftime('%Y-%m-%d %H:%M:%S'),))
             
             result = cursor.fetchone()
-            p_start = result[0] if result else current_price
-            
-        state.hour_start_cache[hour_key][currency] = p_start
-        return p_start
-        
+            if result:
+                # Found price from database
+                p_start = result[0]
+                state.hour_start_cache[hour_key][currency] = p_start
+                return p_start
+                
     except Exception:
-        return current_price
+        pass
+    
+    # No database data yet - this IS the first price of the hour!
+    # Cache it and use it for all subsequent calls this hour
+    state.hour_start_cache[hour_key][currency] = current_price
+    print(f"📌 {currency.upper()}: Cached hour start price ${current_price:.2f} for {hour_key}")
+    return current_price
 
 def get_market_data(currency):
     """Get current market token IDs for the current hour."""
