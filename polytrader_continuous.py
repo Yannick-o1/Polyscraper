@@ -337,7 +337,14 @@ def calculate_model_prediction(currency, current_price, ofi, market_price):
         ofi = ofi if ofi is not None else 0.0
         
         X_live = [[r_scaled, tau, vol, ofi]]
-        prediction = float(state.models[currency].predict(X_live)[0])
+        raw_prediction = float(state.models[currency].predict(X_live)[0])
+        
+        # Ensure prediction is properly bounded between 0 and 1
+        prediction = max(0.0, min(1.0, raw_prediction))
+        
+        # Debug: Log raw vs bounded prediction
+        if abs(raw_prediction - prediction) > 0.01:
+            print(f"    ⚠️ {currency.upper()} prediction bounded: {raw_prediction:.4f} → {prediction:.4f}")
         
         return prediction
         
@@ -541,7 +548,19 @@ def trade_currency_cycle(currency):
         if not best_bid or not best_ask:
             return False
         
+        # Calculate market price first (using decimal values)
         market_price = (best_bid + best_ask) / 2
+        
+        # Scale prices to match web interface (multiply by 100) for database storage
+        best_bid_scaled = best_bid * 100 if best_bid is not None else None
+        best_ask_scaled = best_ask * 100 if best_ask is not None else None
+        
+        # Debug: Log market price calculation
+        print(f"    🔍 Market Debug: best_bid={best_bid:.4f}→{best_bid_scaled:.0f}, best_ask={best_ask:.4f}→{best_ask_scaled:.0f}, market_price={market_price:.4f}")
+        
+        # Use scaled values for database storage
+        best_bid = best_bid_scaled
+        best_ask = best_ask_scaled
         
         # Step 4: Calculate prediction
         start = time.time()
@@ -565,6 +584,9 @@ def trade_currency_cycle(currency):
             delta = (prediction - market_price) * 100
             action = "BUY UP" if delta > PROBABILITY_DELTA_THRESHOLD else "BUY DOWN" if delta < -PROBABILITY_DELTA_THRESHOLD else "HOLD"
             print(f"  📈 {currency.upper()}: {prediction*100:.1f}% vs {market_price*100:.1f}% (Δ{delta:+.1f}pp) → {action}")
+            
+            # Debug: Log raw values for database
+            print(f"    🔍 DB Debug: prediction={prediction:.4f}, market_price={market_price:.4f}, delta={delta:.2f}")
         else:
             print(f"  📈 {currency.upper()}: P=N/A M={market_price*100:.1f}%")
         
