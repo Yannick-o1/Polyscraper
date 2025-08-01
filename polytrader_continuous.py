@@ -557,7 +557,7 @@ def continuous_trading_loop():
             cycle_count += 1
             
             timestamp = datetime.now(UTC).strftime('%H:%M:%S')
-            print(f"\n⚡ {timestamp} [Cycle {cycle_count}]")
+            print(f"\n\n⚡ {timestamp} [Cycle {cycle_count}]")
             
             # Cancel all open orders from previous cycles for maximum dynamism
             if TRADING_ENABLED:
