@@ -551,6 +551,9 @@ def trade_currency_cycle(currency):
         # Calculate market price
         market_price = (best_bid + best_ask) / 2
         
+        # Store original decimal values in cache (before scaling)
+        save_data_point(currency, timestamp, market_name, token_yes, best_bid, best_ask, spot_price, ofi, prediction)
+        
         # Scale prices for database storage (decimal to integer)
         best_bid = best_bid * 100 if best_bid is not None else None
         best_ask = best_ask * 100 if best_ask is not None else None
@@ -602,9 +605,8 @@ def trade_currency_cycle(currency):
             print(f"    \033[32m🟢 ALIGNED: Position already optimal\033[0m")
             print(f"    \033[34m▶️ YES: {trade_result['current_yes']:.2f}→{trade_result['target_yes']:.2f} | NO: {trade_result['current_no']:.2f}→{trade_result['target_no']:.2f}\033[0m")
         
-        # Save data
+        # Save data (already done above with decimal values)
         timestamp = datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')
-        save_data_point(currency, timestamp, market_name, token_yes, best_bid, best_ask, spot_price, ofi, prediction)
         
         # Write to database every cycle
         write_to_database(currency)
@@ -1054,7 +1056,6 @@ def display_mock_portfolio_summary():
                     if len(recent_data) >= 6:
                         best_bid, best_ask = recent_data[3], recent_data[4]
                         if best_bid is not None and best_ask is not None:
-                            # Convert from scaled values (like 55, 62) to decimal (like 0.55, 0.62)
                             market_price = (best_bid + best_ask) / 2
                 
                 pos_value = pos['shares'] * (market_price if pos['direction'] == 'UP' else (1 - market_price))
