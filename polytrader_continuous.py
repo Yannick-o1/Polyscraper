@@ -96,8 +96,8 @@ state = TradingState()
 # === CORE FUNCTIONS ===
 def log_startup():
     """Clean startup logging."""
-    print("🚀 Polymarket Continuous Trading Bot")
-    print("📊 Loading models and connecting to markets...")
+    print("\033[36m🚀 Polymarket Continuous Trading Bot\033[0m")
+    print("\033[34m📊 Loading models and connecting to markets...\033[0m")
 
 def wait_for_rate_limit():
     """Efficient rate limiting."""
@@ -149,15 +149,15 @@ def get_hour_start_price(currency, current_crypto_price):
             # Use opening price of the first minute of the hour
             p_start = float(klines[0][1])  # open price
             state.hour_start_cache[hour_key][currency] = p_start
-            print(f"🔒 {currency.upper()}: Fetched exact hour start price ${p_start:.2f} from Binance for {hour_key}")
+            print(f"\033[33m🔒 {currency.upper()}: Fetched exact hour start price ${p_start:.2f} from Binance for {hour_key}\033[0m")
             return p_start
             
     except Exception as e:
-        print(f"⚠️ Failed to get hour start price from Binance for {currency}: {e}")
+        print(f"\033[33m⚠️ Failed to get hour start price from Binance for {currency}: {e}\033[0m")
     
     # Fallback to current price if Binance call fails
     state.hour_start_cache[hour_key][currency] = current_crypto_price
-    print(f"🔒 {currency.upper()}: Using current price ${current_crypto_price:.2f} as fallback for {hour_key}")
+    print(f"\033[33m🔒 {currency.upper()}: Using current price ${current_crypto_price:.2f} as fallback for {hour_key}\033[0m")
     return current_crypto_price
 
 def get_market_data(currency):
@@ -182,7 +182,7 @@ def get_market_data(currency):
         matching_rows = df[df['date_time'] == target_datetime_str]
         
         if matching_rows.empty:
-            print(f"⚠️ No market found for current hour: {target_datetime_str}")
+            print(f"\033[33m⚠️ No market found for current hour: {target_datetime_str}\033[0m")
             # Fall back to most recent market as backup
             latest_market = df.iloc[-1]
             print(f"   Using fallback market: {latest_market['market_name']}")
@@ -197,7 +197,7 @@ def get_market_data(currency):
         return token_id_yes, token_id_no, market_name
         
     except Exception as e:
-        print(f"❌ Market data error for {currency}: {e}")
+        print(f"\033[31m❌ Market data error for {currency}: {e}\033[0m")
         return None, None, None
 
 def get_live_price_and_ofi(currency):
@@ -228,7 +228,7 @@ def get_live_price_and_ofi(currency):
         return latest_price, ofi
         
     except Exception as e:
-        print(f"❌ Binance error for {currency}: {e}")
+        print(f"\033[31m❌ Binance error for {currency}: {e}\033[0m")
         return None, None
 
 def get_order_book_prices(token_id):
@@ -268,7 +268,7 @@ def get_order_book_prices(token_id):
         return None, None
         
     except Exception as e:
-        print(f"❌ Price API error for token {token_id}: {e}")
+        print(f"\033[31m❌ Price API error for token {token_id}: {e}\033[0m")
         return None, None
 
 def calculate_model_prediction(currency, current_price, ofi, market_price):
@@ -344,12 +344,12 @@ def calculate_model_prediction(currency, current_price, ofi, market_price):
         
         # Debug: Log raw vs bounded prediction
         if abs(raw_prediction - prediction) > 0.01:
-            print(f"    ⚠️ {currency.upper()} prediction bounded: {raw_prediction:.4f} → {prediction:.4f}")
+            print(f"    \033[33m⚠️ {currency.upper()} prediction bounded: {raw_prediction:.4f} → {prediction:.4f}\033[0m")
         
         return prediction
         
     except Exception as e:
-        print(f"❌ Prediction error for {currency}: {e}")
+        print(f"\033[31m❌ Prediction error for {currency}: {e}\033[0m")
         return None
 
 def execute_dynamic_position_management(currency, prediction, market_price, token_yes, token_no, best_bid, best_ask):
@@ -513,10 +513,10 @@ def write_to_database(currency):
             if pd.isna(vol) or vol <= 0:
                 vol = 0.01
             
-            print(f"    ⚙️ Features: ofi={ofi:.4f} | r={r:.4f} | p_start=${p_start:.2f} | vol={vol:.4f} | tau={tau:.3f}")
+            print(f"    \033[35m⚙️ Features: ofi={ofi:.4f} | r={r:.4f} | p_start=${p_start:.2f} | vol={vol:.4f} | tau={tau:.3f}\033[0m")
             
         except Exception as e:
-            print(f"❌ DB write error for {currency}: {e}")
+            print(f"\033[31m❌ DB write error for {currency}: {e}\033[0m")
 
 def trade_currency_cycle(currency):
     """Execute one complete trading cycle for a currency."""
@@ -548,19 +548,15 @@ def trade_currency_cycle(currency):
         if not best_bid or not best_ask:
             return False
         
-        # Calculate market price first (using decimal values)
+        # Calculate market price
         market_price = (best_bid + best_ask) / 2
         
-        # Scale prices to match web interface (multiply by 100) for database storage
-        best_bid_scaled = best_bid * 100 if best_bid is not None else None
-        best_ask_scaled = best_ask * 100 if best_ask is not None else None
+        # Scale prices for database storage (to match web interface)
+        best_bid = best_bid * 100 if best_bid is not None else None
+        best_ask = best_ask * 100 if best_ask is not None else None
         
         # Debug: Log market price calculation
-        print(f"    🔍 Market Debug: best_bid={best_bid:.4f}→{best_bid_scaled:.0f}, best_ask={best_ask:.4f}→{best_ask_scaled:.0f}, market_price={market_price:.4f}")
-        
-        # Use scaled values for database storage
-        best_bid = best_bid_scaled
-        best_ask = best_ask_scaled
+        print(f"    🔍 Market Debug: best_bid={best_bid:.0f}, best_ask={best_ask:.0f}, market_price={market_price:.4f}")
         
         # Step 4: Calculate prediction
         start = time.time()
@@ -574,7 +570,7 @@ def trade_currency_cycle(currency):
         )
         timings['trading'] = time.time() - start
         
-        # Step 6: Execute mock trading
+        # Step 6: Execute mock trading (use decimal market price)
         if MOCK_TRADING_ENABLED:
             execute_mock_trading(currency, prediction, market_price, spot_price)
         
@@ -583,28 +579,28 @@ def trade_currency_cycle(currency):
         if prediction:
             delta = (prediction - market_price) * 100
             action = "BUY UP" if delta > PROBABILITY_DELTA_THRESHOLD else "BUY DOWN" if delta < -PROBABILITY_DELTA_THRESHOLD else "HOLD"
-            print(f"  📈 {currency.upper()}: {prediction*100:.1f}% vs {market_price*100:.1f}% (Δ{delta:+.1f}pp) → {action}")
+            print(f"  \033[36m📈 {currency.upper()}: {prediction*100:.1f}% vs {market_price*100:.1f}% (Δ{delta:+.1f}pp) → {action}\033[0m")
             
             # Debug: Log raw values for database
-            print(f"    🔍 DB Debug: prediction={prediction:.4f}, market_price={market_price:.4f}, delta={delta:.2f}")
+            print(f"    \033[35m🔍 DB Debug: prediction={prediction:.4f}, market_price={market_price:.4f}, delta={delta:.2f}\033[0m")
         else:
-            print(f"  📈 {currency.upper()}: P=N/A M={market_price*100:.1f}%")
+            print(f"  \033[36m📈 {currency.upper()}: P=N/A M={market_price*100:.1f}%\033[0m")
         
         # Display trade result with position info
         if trade_result["executed"]:
-            print(f"    🟢 SIMULATED: {trade_result['direction']} exposure ${trade_result['target_exposure']:.2f}")
-            print(f"    ▶️ YES: {trade_result['current_yes']:.2f}→{trade_result['target_yes']:.2f} | NO: {trade_result['current_no']:.2f}→{trade_result['target_no']:.2f}")
+            print(f"    \033[32m🟢 SIMULATED: {trade_result['direction']} exposure ${trade_result['target_exposure']:.2f}\033[0m")
+            print(f"    \033[34m▶️ YES: {trade_result['current_yes']:.2f}→{trade_result['target_yes']:.2f} | NO: {trade_result['current_no']:.2f}→{trade_result['target_no']:.2f}\033[0m")
         elif trade_result["reason"] == "delta_too_small":
-            print(f"    ⚪ FLAT: Delta {trade_result['delta']:.1f}pp below threshold ({PROBABILITY_DELTA_THRESHOLD}pp)")
+            print(f"    \033[37m⚪ FLAT: Delta {trade_result['delta']:.1f}pp below threshold ({PROBABILITY_DELTA_THRESHOLD}pp)\033[0m")
         elif trade_result["reason"] == "insufficient_funds":
-            print(f"    🔴 TOO EXPENSIVE: Need ${trade_result['needed']:.2f}, have ${trade_result['available']:.2f}")
-            print(f"    ▶️ YES: {trade_result['current_yes']:.2f}→{trade_result['target_yes']:.2f} | NO: {trade_result['current_no']:.2f}→{trade_result['target_no']:.2f}")
+            print(f"    \033[31m🔴 TOO EXPENSIVE: Need ${trade_result['needed']:.2f}, have ${trade_result['available']:.2f}\033[0m")
+            print(f"    \033[34m▶️ YES: {trade_result['current_yes']:.2f}→{trade_result['target_yes']:.2f} | NO: {trade_result['current_no']:.2f}→{trade_result['target_no']:.2f}\033[0m")
         elif trade_result["reason"] == "adjustment_too_small":
-            print(f"    🟡 TOO SMALL: Adjustment {trade_result['adjustment']} below minimum")
-            print(f"    ▶️ YES: {trade_result['current_yes']:.2f}→{trade_result['target_yes']:.2f} | NO: {trade_result['current_no']:.2f}→{trade_result['target_no']:.2f}")
+            print(f"    \033[33m🟡 TOO SMALL: Adjustment {trade_result['adjustment']} below minimum\033[0m")
+            print(f"    \033[34m▶️ YES: {trade_result['current_yes']:.2f}→{trade_result['target_yes']:.2f} | NO: {trade_result['current_no']:.2f}→{trade_result['target_no']:.2f}\033[0m")
         elif trade_result["reason"] == "position_aligned":
-            print(f"    🟢 ALIGNED: Position already optimal")
-            print(f"    ▶️ YES: {trade_result['current_yes']:.2f}→{trade_result['target_yes']:.2f} | NO: {trade_result['current_no']:.2f}→{trade_result['target_no']:.2f}")
+            print(f"    \033[32m🟢 ALIGNED: Position already optimal\033[0m")
+            print(f"    \033[34m▶️ YES: {trade_result['current_yes']:.2f}→{trade_result['target_yes']:.2f} | NO: {trade_result['current_no']:.2f}→{trade_result['target_no']:.2f}\033[0m")
         
         # Save data
         timestamp = datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')
@@ -616,7 +612,7 @@ def trade_currency_cycle(currency):
         return True
         
     except Exception as e:
-        print(f"  ❌ {currency.upper()} error: {e}")
+        print(f"  \033[31m❌ {currency.upper()} error: {e}\033[0m")
         return False
 
 def initialize_system():
@@ -629,20 +625,20 @@ def initialize_system():
             model_file = f"{currency}_lgbm.txt"
             if os.path.exists(model_file):
                 state.models[currency] = lgb.Booster(model_file=model_file)
-                print(f"✅ {currency.upper()} model loaded")
-            else:
-                print(f"⚠️ {currency.upper()} model file not found")
-        except Exception as e:
-            print(f"❌ Error loading {currency.upper()} model: {e}")
+                        print(f"\033[32m✅ {currency.upper()} model loaded\033[0m")
+    else:
+        print(f"\033[33m⚠️ {currency.upper()} model file not found\033[0m")
+except Exception as e:
+    print(f"\033[31m❌ Error loading {currency.upper()} model: {e}\033[0m")
     
     # Initialize mock trading
     if MOCK_TRADING_ENABLED:
-        print("💰 Initializing mock trading system...")
+        print("\033[33m💰 Initializing mock trading system...\033[0m")
         initialize_mock_trading()
         state.mock_initialized = True
-        print(f"✅ Mock trading ready with ${MOCK_INITIAL_BANKROLL} bankroll")
+        print(f"\033[32m✅ Mock trading ready with ${MOCK_INITIAL_BANKROLL} bankroll\033[0m")
     
-    print("🎯 System ready for continuous trading!")
+    print("\033[32m🎯 System ready for continuous trading!\033[0m")
 
 def continuous_trading_loop():
     """Main continuous trading loop."""
@@ -650,10 +646,10 @@ def continuous_trading_loop():
     cycle_count = 0
     currency_index = 0  # Track which currency to trade this cycle
     
-    print(f"\n🔄 Starting continuous loop: {' → '.join(c.upper() for c in currencies)}")
-    print(f"⏱️ Cycle delay: {CYCLE_DELAY_SECONDS}s | 💾 DB writes: Every cycle")
+    print(f"\n\033[36m🔄 Starting continuous loop: {' → '.join(c.upper() for c in currencies)}\033[0m")
+    print(f"\033[34m⏱️ Cycle delay: {CYCLE_DELAY_SECONDS}s | 💾 DB writes: Every cycle\033[0m")
     if MOCK_TRADING_ENABLED:
-        print(f"💰 Mock trading: ${MOCK_INITIAL_BANKROLL} bankroll | Kelly: {MOCK_KELLY_FRACTION*100:.0f}% | Theta: {MOCK_THETA*100:.0f}%")
+        print(f"\033[33m💰 Mock trading: ${MOCK_INITIAL_BANKROLL} bankroll | Kelly: {MOCK_KELLY_FRACTION*100:.0f}% | Theta: {MOCK_THETA*100:.0f}%\033[0m")
     print("-" * 60)
     
     try:
@@ -663,7 +659,7 @@ def continuous_trading_loop():
             
             timestamp = datetime.now(UTC).strftime('%H:%M:%S')
             current_currency = currencies[currency_index]
-            print(f"\n\n⚡ {timestamp} [Cycle {cycle_count}] - {current_currency.upper()}")
+            print(f"\n\n\033[35m⚡ {timestamp} [Cycle {cycle_count}] - {current_currency.upper()}\033[0m")
             
             # Check for hour change and calculate outcomes
             check_hour_outcomes()
@@ -691,7 +687,7 @@ def continuous_trading_loop():
                 time.sleep(sleep_time)
     
     except KeyboardInterrupt:
-        print("\n👋 Shutdown requested")
+        print("\n\033[33m👋 Shutdown requested\033[0m")
         state.running = False
 
 def cancel_all_open_orders():
@@ -729,7 +725,7 @@ def cancel_all_open_orders():
                 pass
         
         if cancelled_count > 0:
-            print(f"  🗑️ Cancelled {cancelled_count} open orders")
+            print(f"  \033[33m🗑️ Cancelled {cancelled_count} open orders\033[0m")
         
         return cancelled_count
         
@@ -796,7 +792,7 @@ def initialize_mock_trading():
                     )
                 ''')
         except Exception as e:
-            print(f"❌ Error initializing mock trading DB for {currency}: {e}")
+            print(f"\033[31m❌ Error initializing mock trading DB for {currency}: {e}\033[0m")
 
 def execute_mock_trading(currency, prediction, market_price, spot_price):
     """Execute mock trading based on model prediction vs market price."""
@@ -838,9 +834,9 @@ def execute_mock_trading(currency, prediction, market_price, spot_price):
         # Debug: Show current state
         if old_position['shares'] > 0:
             old_pos_value = old_position['shares'] * (market_price if old_position['direction'] == 'UP' else (1 - market_price))
-            print(f"    💰 Mock {currency.upper()}: Delta={delta:+.1%} | Current: {old_position['shares']:.2f} {old_position['direction']} = ${old_pos_value:.2f}")
-        else:
-            print(f"    💰 Mock {currency.upper()}: Delta={delta:+.1%} | Current: No position")
+                    print(f"    \033[33m💰 Mock {currency.upper()}: Delta={delta:+.1%} | Current: {old_position['shares']:.2f} {old_position['direction']} = ${old_pos_value:.2f}\033[0m")
+    else:
+        print(f"    \033[33m💰 Mock {currency.upper()}: Delta={delta:+.1%} | Current: No position\033[0m")
         
         # Determine target position using Kelly criterion
         target_direction = None
@@ -850,9 +846,9 @@ def execute_mock_trading(currency, prediction, market_price, spot_price):
             target_direction = 'UP' if delta > 0 else 'DOWN'
             target_value = abs(delta) * MOCK_KELLY_FRACTION * portfolio_value
             target_value = min(target_value, portfolio_value * 0.1)  # Cap at 10% of portfolio
-            print(f"       🎯 Target: {target_direction} | Value: ${target_value:.2f} | Portfolio: ${portfolio_value:.2f}")
+            print(f"       \033[32m🎯 Target: {target_direction} | Value: ${target_value:.2f} | Portfolio: ${portfolio_value:.2f}\033[0m")
         else:
-            print(f"       🎯 Target: FLAT (delta {delta:+.1%} < threshold {MOCK_THETA:.1%})")
+            print(f"       \033[32m🎯 Target: FLAT (delta {delta:+.1%} < threshold {MOCK_THETA:.1%})\033[0m")
         
         # Calculate position adjustment needed
         trade_pnl = 0
@@ -868,24 +864,24 @@ def execute_mock_trading(currency, prediction, market_price, spot_price):
         # Case 1: Direction changed (e.g., UP -> DOWN or DOWN -> UP)
         if position['direction'] and position['direction'] != target_direction:
             should_adjust = True
-            print(f"       🔄 Direction change: {position['direction']} → {target_direction}")
+            print(f"       \033[36m🔄 Direction change: {position['direction']} → {target_direction}\033[0m")
         
         # Case 2: Going flat (target is None but we have position)
         elif position['direction'] and target_direction is None:
             should_adjust = True
-            print(f"       🔄 Going flat: {position['direction']} → FLAT")
+            print(f"       \033[36m🔄 Going flat: {position['direction']} → FLAT\033[0m")
         
         # Case 3: Position size mismatch (current vs target value)
         elif position['shares'] > 0 and target_direction == position['direction']:
             size_diff = abs(target_value - current_pos_value)
             if size_diff > 0.5:  # If difference is more than $0.50
                 should_adjust = True
-                print(f"       🔄 Size adjustment: ${current_pos_value:.2f} → ${target_value:.2f}")
+                print(f"       \033[36m🔄 Size adjustment: ${current_pos_value:.2f} → ${target_value:.2f}\033[0m")
         
         # Case 4: New position when we have none
         elif not position['direction'] and target_direction:
             should_adjust = True
-            print(f"       🔄 New position: FLAT → {target_direction}")
+            print(f"       \033[36m🔄 New position: FLAT → {target_direction}\033[0m")
         
         # Execute position adjustment
         if should_adjust:
@@ -897,7 +893,7 @@ def execute_mock_trading(currency, prediction, market_price, spot_price):
                 trade_pnl = cash_received - cost_of_shares
                 
                 state.mock_available_cash += cash_received
-                print(f"       💰 Sold {position['shares']:.2f} {position['direction']} @ ${price:.3f} = ${cash_received:.2f}")
+                print(f"       \033[31m💰 Sold {position['shares']:.2f} {position['direction']} @ ${price:.3f} = ${cash_received:.2f}\033[0m")
                 
                 # Clear position
                 position = {'direction': None, 'shares': 0, 'avg_cost': 0}
@@ -915,7 +911,7 @@ def execute_mock_trading(currency, prediction, market_price, spot_price):
                         position = {'direction': target_direction, 'shares': shares_to_buy, 'avg_cost': price}
                         action = f"BUY {target_direction}"
                         amount = shares_to_buy
-                        print(f"       💰 Bought {shares_to_buy:.2f} {target_direction} @ ${price:.3f} = ${cost:.2f}")
+                        print(f"       \033[32m💰 Bought {shares_to_buy:.2f} {target_direction} @ ${price:.3f} = ${cost:.2f}\033[0m")
             
             # Case 2: Size adjustment - only adjust the difference
             elif position['shares'] > 0 and target_direction == position['direction']:
@@ -938,7 +934,7 @@ def execute_mock_trading(currency, prediction, market_price, spot_price):
                             position['avg_cost'] = total_cost / position['shares']
                             action = f"ADD {target_direction}"
                             amount = shares_to_add
-                            print(f"       💰 Added {shares_to_add:.2f} {target_direction} @ ${price:.3f} = ${cost:.2f}")
+                            print(f"       \033[32m💰 Added {shares_to_add:.2f} {target_direction} @ ${price:.3f} = ${cost:.2f}\033[0m")
                     
                     else:  # Need to sell some
                         shares_to_sell = abs(value_diff) / price if price > 0 else 0
@@ -948,7 +944,7 @@ def execute_mock_trading(currency, prediction, market_price, spot_price):
                         position['shares'] -= shares_to_sell
                         action = f"REDUCE {target_direction}"
                         amount = shares_to_sell
-                        print(f"       💰 Sold {shares_to_sell:.2f} {target_direction} @ ${price:.3f} = ${cash_received:.2f}")
+                        print(f"       \033[31m💰 Sold {shares_to_sell:.2f} {target_direction} @ ${price:.3f} = ${cash_received:.2f}\033[0m")
             
             # Case 3: New position when we have none
             elif not position['direction'] and target_direction:
@@ -961,9 +957,9 @@ def execute_mock_trading(currency, prediction, market_price, spot_price):
                     position = {'direction': target_direction, 'shares': shares_to_buy, 'avg_cost': price}
                     action = f"BUY {target_direction}"
                     amount = shares_to_buy
-                    print(f"       💰 Bought {shares_to_buy:.2f} {target_direction} @ ${price:.3f} = ${cost:.2f}")
+                    print(f"       \033[32m💰 Bought {shares_to_buy:.2f} {target_direction} @ ${price:.3f} = ${cost:.2f}\033[0m")
         else:
-            print(f"       ✅ Position optimal: {position['shares']:.2f} {position['direction']} = ${current_pos_value:.2f}")
+            print(f"       \033[32m✅ Position optimal: {position['shares']:.2f} {position['direction']} = ${current_pos_value:.2f}\033[0m")
         
         # Update position
         state.mock_positions[currency] = position
@@ -1001,21 +997,21 @@ def execute_mock_trading(currency, prediction, market_price, spot_price):
         if action != "HOLD":
             new_pos = state.mock_positions.get(currency, {'direction': None, 'shares': 0, 'avg_cost': 0})
             
-            print(f"       📋 {action} | Amount: ${amount:.2f} @ {market_price:.1%}")
-            print(f"       📊 Before: {old_position['shares']:.2f} {old_position['direction'] or 'FLAT'} @ ${old_position['avg_cost']:.3f}")
-            print(f"       📊 After:  {new_pos['shares']:.2f} {new_pos['direction'] or 'FLAT'} @ ${new_pos['avg_cost']:.3f}")
-            print(f"       💵 Cash: ${state.mock_available_cash:.2f} | Portfolio: ${final_bankroll:.2f} ({return_pct:+.1f}%)")
+            print(f"       \033[34m📋 {action} | Amount: ${amount:.2f} @ {market_price:.1%}\033[0m")
+            print(f"       \033[35m📊 Before: {old_position['shares']:.2f} {old_position['direction'] or 'FLAT'} @ ${old_position['avg_cost']:.3f}\033[0m")
+            print(f"       \033[35m📊 After:  {new_pos['shares']:.2f} {new_pos['direction'] or 'FLAT'} @ ${new_pos['avg_cost']:.3f}\033[0m")
+            print(f"       \033[33m💵 Cash: ${state.mock_available_cash:.2f} | Portfolio: ${final_bankroll:.2f} ({return_pct:+.1f}%)\033[0m")
         else:
             # For HOLD, show current position
             pos = state.mock_positions.get(currency, {'direction': None, 'shares': 0, 'avg_cost': 0})
             if pos['shares'] > 0:
                 pos_value = pos['shares'] * (market_price if pos['direction'] == 'UP' else (1 - market_price))
-                print(f"       💤 HOLD | {pos['shares']:.2f} {pos['direction']} @ ${pos['avg_cost']:.3f} = ${pos_value:.2f}")
+                print(f"       \033[37m💤 HOLD | {pos['shares']:.2f} {pos['direction']} @ ${pos['avg_cost']:.3f} = ${pos_value:.2f}\033[0m")
             else:
-                print(f"       💤 HOLD | No position | Portfolio: ${final_bankroll:.2f} ({return_pct:+.1f}%)")
+                print(f"       \033[37m💤 HOLD | No position | Portfolio: ${final_bankroll:.2f} ({return_pct:+.1f}%)\033[0m")
         
     except Exception as e:
-        print(f"❌ Mock trading error for {currency}: {e}")
+        print(f"\033[31m❌ Mock trading error for {currency}: {e}\033[0m")
 
 def save_mock_trading_result(currency, total_bankroll, return_pct, direction, amount, action, delta, market_price, prediction):
     """Save mock trading result to database."""
@@ -1034,7 +1030,7 @@ def save_mock_trading_result(currency, total_bankroll, return_pct, direction, am
             ''', (timestamp, total_bankroll, return_pct, currency, direction, amount, action, delta, market_price, prediction))
             
     except Exception as e:
-        print(f"❌ Error saving mock trading result for {currency}: {e}")
+        print(f"\033[31m❌ Error saving mock trading result for {currency}: {e}\033[0m")
 
 def display_mock_portfolio_summary():
     """Display comprehensive portfolio summary."""
@@ -1042,8 +1038,8 @@ def display_mock_portfolio_summary():
         return
         
     try:
-        print(f"\n💼 MOCK PORTFOLIO SUMMARY")
-        print(f"   💵 Available Cash: ${state.mock_available_cash:.2f}")
+        print(f"\n\033[36m💼 MOCK PORTFOLIO SUMMARY\033[0m")
+        print(f"   \033[33m💵 Available Cash: ${state.mock_available_cash:.2f}\033[0m")
         
         total_position_value = 0
         active_positions = 0
@@ -1066,20 +1062,20 @@ def display_mock_portfolio_summary():
                 cost_basis = pos['shares'] * pos['avg_cost'] 
                 unrealized_pnl = pos_value - cost_basis
                 
-                print(f"   📈 {currency.upper()}: {pos['shares']:.2f} {pos['direction']} @ ${pos['avg_cost']:.3f} | "
-                      f"Value: ${pos_value:.2f} | P&L: ${unrealized_pnl:+.2f}")
+                print(f"   \033[32m📈 {currency.upper()}: {pos['shares']:.2f} {pos['direction']} @ ${pos['avg_cost']:.3f} | "
+                      f"Value: ${pos_value:.2f} | P&L: ${unrealized_pnl:+.2f}\033[0m")
         
         total_portfolio = state.mock_available_cash + total_position_value
         total_return_pct = ((total_portfolio - MOCK_INITIAL_BANKROLL) / MOCK_INITIAL_BANKROLL) * 100
         
         if active_positions == 0:
-            print("   📭 No active positions")
+            print("   \033[37m📭 No active positions\033[0m")
         
-        print(f"   🏦 Total Portfolio: ${total_portfolio:.2f} ({total_return_pct:+.1f}%) | Positions: {active_positions}")
+        print(f"   \033[34m🏦 Total Portfolio: ${total_portfolio:.2f} ({total_return_pct:+.1f}%) | Positions: {active_positions}\033[0m")
         print("━" * 60)
         
     except Exception as e:
-        print(f"❌ Error displaying portfolio summary: {e}")
+        print(f"\033[31m❌ Error displaying portfolio summary: {e}\033[0m")
 
 def check_hour_outcomes():
     """Check if hour has changed and calculate UP/DOWN outcomes for previous hour."""
@@ -1092,8 +1088,8 @@ def check_hour_outcomes():
     
     # Check if hour has changed
     if current_hour_key != state.last_hour_key:
-        print(f"\n🕒 HOUR CHANGE DETECTED: {state.last_hour_key} → {current_hour_key}")
-        print("📊 Calculating outcomes for previous hour...")
+        print(f"\n\033[33m🕒 HOUR CHANGE DETECTED: {state.last_hour_key} → {current_hour_key}\033[0m")
+        print("\033[34m📊 Calculating outcomes for previous hour...\033[0m")
         
         # Calculate outcomes for each currency for the previous hour
         for currency in CURRENCY_CONFIG.keys():
@@ -1113,11 +1109,11 @@ def calculate_currency_outcome(currency, previous_hour_key):
     try:
         # Check if we have p_start for this hour
         if previous_hour_key not in state.hour_start_cache:
-            print(f"  ⚠️ {currency.upper()}: No p_start data for {previous_hour_key}")
+            print(f"  \033[33m⚠️ {currency.upper()}: No p_start data for {previous_hour_key}\033[0m")
             return
         
         if currency not in state.hour_start_cache[previous_hour_key]:
-            print(f"  ⚠️ {currency.upper()}: No p_start data for {previous_hour_key}")
+            print(f"  \033[33m⚠️ {currency.upper()}: No p_start data for {previous_hour_key}\033[0m")
             return
         
         p_start = state.hour_start_cache[previous_hour_key][currency]
@@ -1157,16 +1153,16 @@ def calculate_currency_outcome(currency, previous_hour_key):
             outcome = "UP" if price_change > 0 else "DOWN"
             change_pct = (price_change / p_start) * 100
             
-            print(f"  🎯 {currency.upper()}: ${p_start:.2f} → ${p_end:.2f} = {outcome} ({change_pct:+.2f}%)")
+            print(f"  \033[32m🎯 {currency.upper()}: ${p_start:.2f} → ${p_end:.2f} = {outcome} ({change_pct:+.2f}%)\033[0m")
             
             # Store outcome in database if needed
             store_outcome_in_db(currency, previous_hour_key, p_start, p_end, outcome, change_pct)
             
         else:
-            print(f"  ❌ {currency.upper()}: No kline data available for {previous_hour_key}")
+            print(f"  \033[31m❌ {currency.upper()}: No kline data available for {previous_hour_key}\033[0m")
             
     except Exception as e:
-        print(f"  ❌ {currency.upper()}: Error calculating outcome - {e}")
+        print(f"  \033[31m❌ {currency.upper()}: Error calculating outcome - {e}\033[0m")
 
 def store_outcome_in_db(currency, hour_key, p_start, p_end, outcome, change_pct):
     """Store the hour outcome in the database."""
@@ -1194,16 +1190,16 @@ def store_outcome_in_db(currency, hour_key, p_start, p_end, outcome, change_pct)
             ''', (hour_key, p_start, p_end, outcome, change_pct, datetime.now(UTC).isoformat()))
             
     except Exception as e:
-        print(f"    ⚠️ DB error storing outcome: {e}")
+        print(f"    \033[33m⚠️ DB error storing outcome: {e}\033[0m")
 
 # === MAIN EXECUTION ===
 if __name__ == "__main__":
     import sys
     
     if len(sys.argv) > 1 and sys.argv[1] == "--test":
-        print("🧪 Test mode - all systems check")
+        print("\033[36m🧪 Test mode - all systems check\033[0m")
         initialize_system()
-        print("✅ Test completed successfully!")
+        print("\033[32m✅ Test completed successfully!\033[0m")
     else:
         initialize_system()
         continuous_trading_loop() 
