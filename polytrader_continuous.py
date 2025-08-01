@@ -551,6 +551,9 @@ def trade_currency_cycle(currency):
         # Calculate market price
         market_price = (best_bid + best_ask) / 2
         
+        # Create timestamp for this cycle
+        timestamp = datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')
+        
         # Store original decimal values in cache (before scaling)
         save_data_point(currency, timestamp, market_name, token_yes, best_bid, best_ask, spot_price, ofi, prediction)
         
@@ -561,19 +564,22 @@ def trade_currency_cycle(currency):
         # Debug: Log market price calculation
         print(f"    🔍 Market Debug: best_bid={best_bid:.0f}, best_ask={best_ask:.0f}, market_price={market_price:.4f}")
         
-        # Step 4: Calculate prediction
+        # Step 4: Ensure p_start is cached for this hour (needed for outcomes)
+        get_hour_start_price(currency, spot_price)
+        
+        # Step 5: Calculate prediction
         start = time.time()
         prediction = calculate_model_prediction(currency, spot_price, ofi, market_price)
         timings['prediction'] = time.time() - start
         
-        # Step 5: Execute trading logic
+        # Step 6: Execute trading logic
         start = time.time()
         trade_result = execute_dynamic_position_management(
             currency, prediction, market_price, token_yes, token_no, best_bid, best_ask
         )
         timings['trading'] = time.time() - start
         
-        # Step 6: Execute mock trading (use decimal market price)
+        # Step 7: Execute mock trading (use decimal market price)
         if MOCK_TRADING_ENABLED:
             execute_mock_trading(currency, prediction, market_price, spot_price)
         
@@ -606,7 +612,6 @@ def trade_currency_cycle(currency):
             print(f"    \033[34m▶️ YES: {trade_result['current_yes']:.2f}→{trade_result['target_yes']:.2f} | NO: {trade_result['current_no']:.2f}→{trade_result['target_no']:.2f}\033[0m")
         
         # Save data (already done above with decimal values)
-        timestamp = datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')
         
         # Write to database every cycle
         write_to_database(currency)
