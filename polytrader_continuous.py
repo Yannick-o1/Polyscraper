@@ -551,7 +551,7 @@ def trade_currency_cycle(currency):
         # Calculate market price
         market_price = (best_bid + best_ask) / 2
         
-        # Scale prices for database storage (to match web interface)
+        # Scale prices for database storage (decimal to integer)
         best_bid = best_bid * 100 if best_bid is not None else None
         best_ask = best_ask * 100 if best_ask is not None else None
         
@@ -823,7 +823,7 @@ def execute_mock_trading(currency, prediction, market_price, spot_price):
                             best_bid, best_ask = recent_data[3], recent_data[4]
                             if best_bid is not None and best_ask is not None:
                                 curr_market_price = (best_bid + best_ask) / 2
-                    
+                
                 if pos['direction'] == 'UP':
                     total_pos_value += pos['shares'] * curr_market_price
                 elif pos['direction'] == 'DOWN':
@@ -1054,6 +1054,7 @@ def display_mock_portfolio_summary():
                     if len(recent_data) >= 6:
                         best_bid, best_ask = recent_data[3], recent_data[4]
                         if best_bid is not None and best_ask is not None:
+                            # Convert from scaled values (like 55, 62) to decimal (like 0.55, 0.62)
                             market_price = (best_bid + best_ask) / 2
                 
                 pos_value = pos['shares'] * (market_price if pos['direction'] == 'UP' else (1 - market_price))
