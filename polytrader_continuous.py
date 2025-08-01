@@ -272,24 +272,36 @@ def calculate_model_prediction(currency, current_price, ofi, market_price):
         current_minute = datetime.now(UTC).minute
         tau = max(1 - (current_minute / 60), 0.01)
         
-        # Get volatility from recent data
-        config = CURRENCY_CONFIG[currency]
-        with sqlite3.connect(f"{currency}_polyscraper.db") as conn:
-            cursor = conn.cursor()
-            cursor.execute(f"""
-                SELECT {config['db_column']} FROM polydata 
-                WHERE {config['db_column']} IS NOT NULL 
-                ORDER BY timestamp DESC LIMIT 20
-            """)
-            recent_prices = [row[0] for row in cursor.fetchall()]
-        
-        if len(recent_prices) >= 20:
-            price_series = pd.Series(recent_prices[::-1])
-            log_returns = np.log(price_series).diff()
-            rolling_vol = log_returns.rolling(window=20, min_periods=2).std()
-            vol = rolling_vol.iloc[-1] * np.sqrt(60) if not rolling_vol.empty else 0.01
+        # Get volatility from last 20 minutes of live price cache
+        if currency in state.data_cache and len(state.data_cache[currency]) >= 5:
+            # Filter cache to last 20 minutes
+            current_time = datetime.now(UTC)
+            twenty_minutes_ago = current_time - timedelta(minutes=20)
+            
+            # Extract data points from last 20 minutes: (timestamp, market_name, token_id, best_bid, best_ask, spot_price, ofi, prediction)
+            recent_data = []
+            for data_point in state.data_cache[currency]:
+                # Parse timestamp from data point
+                try:
+                    data_timestamp = datetime.strptime(data_point[0], '%Y-%m-%d %H:%M:%S').replace(tzinfo=UTC)
+                    if data_timestamp >= twenty_minutes_ago:
+                        recent_data.append(data_point)
+                except:
+                    # If timestamp parsing fails, include the point (better safe than sorry)
+                    recent_data.append(data_point)
+            
+            if len(recent_data) >= 5:
+                # Extract spot prices from last 20 minutes
+                recent_prices = [data_point[5] for data_point in recent_data]
+                price_series = pd.Series(recent_prices)
+                log_returns = np.log(price_series).diff()
+                rolling_vol = log_returns.std()
+                vol = rolling_vol * np.sqrt(60) if not pd.isna(rolling_vol) and rolling_vol > 0 else 0.01
+            else:
+                vol = 0.01
         else:
-            vol = 0.01
+            # Fallback: use a reasonable default volatility
+            vol = 0.02  # 2% hourly vol as default
             
         if pd.isna(vol) or vol <= 0:
             vol = 0.01
@@ -420,23 +432,36 @@ def write_to_database(currency):
             current_minute = datetime.now(UTC).minute
             tau = max(1 - (current_minute / 60), 0.01)
             
-            # Get volatility from recent data
-            with sqlite3.connect(f"{currency}_polyscraper.db") as conn:
-                cursor = conn.cursor()
-                cursor.execute(f"""
-                    SELECT {config['db_column']} FROM polydata 
-                    WHERE {config['db_column']} IS NOT NULL 
-                    ORDER BY timestamp DESC LIMIT 20
-                """)
-                recent_prices = [row[0] for row in cursor.fetchall()]
-            
-            if len(recent_prices) >= 20:
-                price_series = pd.Series(recent_prices[::-1])
-                log_returns = np.log(price_series).diff()
-                rolling_vol = log_returns.rolling(window=20, min_periods=2).std()
-                vol = rolling_vol.iloc[-1] * np.sqrt(60) if not rolling_vol.empty else 0.01
+            # Get volatility from last 20 minutes (consistent with prediction calculation)
+            if currency in state.data_cache and len(state.data_cache[currency]) >= 5:
+                # Filter cache to last 20 minutes
+                current_time = datetime.now(UTC)
+                twenty_minutes_ago = current_time - timedelta(minutes=20)
+                
+                # Extract data points from last 20 minutes: (timestamp, market_name, token_id, best_bid, best_ask, spot_price, ofi, prediction)
+                recent_data = []
+                for data_point in state.data_cache[currency]:
+                    # Parse timestamp from data point
+                    try:
+                        data_timestamp = datetime.strptime(data_point[0], '%Y-%m-%d %H:%M:%S').replace(tzinfo=UTC)
+                        if data_timestamp >= twenty_minutes_ago:
+                            recent_data.append(data_point)
+                    except:
+                        # If timestamp parsing fails, include the point (better safe than sorry)
+                        recent_data.append(data_point)
+                
+                if len(recent_data) >= 5:
+                    # Extract spot prices from last 20 minutes
+                    recent_prices = [data_point[5] for data_point in recent_data]
+                    price_series = pd.Series(recent_prices)
+                    log_returns = np.log(price_series).diff()
+                    rolling_vol = log_returns.std()
+                    vol = rolling_vol * np.sqrt(60) if not pd.isna(rolling_vol) and rolling_vol > 0 else 0.01
+                else:
+                    vol = 0.01
             else:
-                vol = 0.01
+                # Fallback: use a reasonable default volatility
+                vol = 0.02  # 2% hourly vol as default
                 
             if pd.isna(vol) or vol <= 0:
                 vol = 0.01
@@ -565,6 +590,9 @@ def continuous_trading_loop():
             current_currency = currencies[currency_index]
             print(f"\n\n⚡ {timestamp} [Cycle {cycle_count}] - {current_currency.upper()}")
             
+            # Check for hour change and calculate outcomes
+            check_hour_outcomes()
+            
             # Cancel all open orders from previous cycles for maximum dynamism
             if TRADING_ENABLED:
                 cancel_all_open_orders()
@@ -664,6 +692,116 @@ def get_current_position(token_id_yes, token_id_no):
     except Exception:
         # Don't let position lookup errors stop trading
         return 0, 0
+
+def check_hour_outcomes():
+    """Check if hour has changed and calculate UP/DOWN outcomes for previous hour."""
+    current_hour_key = datetime.now(UTC).strftime('%Y-%m-%d_%H')
+    
+    # Initialize last_hour tracking if not exists
+    if not hasattr(state, 'last_hour_key'):
+        state.last_hour_key = current_hour_key
+        return
+    
+    # Check if hour has changed
+    if current_hour_key != state.last_hour_key:
+        print(f"\n🕒 HOUR CHANGE DETECTED: {state.last_hour_key} → {current_hour_key}")
+        print("📊 Calculating outcomes for previous hour...")
+        
+        # Calculate outcomes for each currency for the previous hour
+        for currency in CURRENCY_CONFIG.keys():
+            calculate_currency_outcome(currency, state.last_hour_key)
+        
+        # Update last hour tracker
+        state.last_hour_key = current_hour_key
+        print("━" * 60)
+
+def calculate_currency_outcome(currency, previous_hour_key):
+    """Calculate UP/DOWN outcome for a specific currency and hour."""
+    try:
+        # Check if we have p_start for this hour
+        if previous_hour_key not in state.hour_start_cache:
+            print(f"  ⚠️ {currency.upper()}: No p_start data for {previous_hour_key}")
+            return
+        
+        if currency not in state.hour_start_cache[previous_hour_key]:
+            print(f"  ⚠️ {currency.upper()}: No p_start data for {previous_hour_key}")
+            return
+        
+        p_start = state.hour_start_cache[previous_hour_key][currency]
+        
+        # Get exact end-of-hour price from Binance
+        # Parse the hour to get end time
+        hour_parts = previous_hour_key.split('_')
+        date_part = hour_parts[0]  # '2025-08-01'
+        hour_part = int(hour_parts[1])  # 13
+        
+        # Calculate end of hour timestamp
+        end_hour = datetime.strptime(f"{date_part} {hour_part:02d}:59:59", '%Y-%m-%d %H:%M:%S')
+        end_hour = end_hour.replace(tzinfo=UTC)
+        end_hour_ms = int(end_hour.timestamp() * 1000)
+        
+        # Get price from Binance at exact hour end using klines
+        config = CURRENCY_CONFIG[currency]
+        wait_for_rate_limit()
+        
+        response = requests.get("https://api.binance.com/api/v3/klines", 
+                              params={
+                                  "symbol": config['asset_symbol'], 
+                                  "interval": "1m",
+                                  "endTime": end_hour_ms,
+                                  "limit": 1
+                              }, 
+                              timeout=5)
+        response.raise_for_status()
+        
+        klines = response.json()
+        if klines:
+            # Use closing price of the last minute of the hour
+            p_end = float(klines[0][4])  # close price
+            
+            # Calculate outcome
+            price_change = p_end - p_start
+            outcome = "UP" if price_change > 0 else "DOWN"
+            change_pct = (price_change / p_start) * 100
+            
+            print(f"  🎯 {currency.upper()}: ${p_start:.2f} → ${p_end:.2f} = {outcome} ({change_pct:+.2f}%)")
+            
+            # Store outcome in database if needed
+            store_outcome_in_db(currency, previous_hour_key, p_start, p_end, outcome, change_pct)
+            
+        else:
+            print(f"  ❌ {currency.upper()}: No kline data available for {previous_hour_key}")
+            
+    except Exception as e:
+        print(f"  ❌ {currency.upper()}: Error calculating outcome - {e}")
+
+def store_outcome_in_db(currency, hour_key, p_start, p_end, outcome, change_pct):
+    """Store the hour outcome in the database."""
+    try:
+        with sqlite3.connect(f"{currency}_polyscraper.db") as conn:
+            cursor = conn.cursor()
+            
+            # Create outcomes table if it doesn't exist
+            cursor.execute(f'''
+                CREATE TABLE IF NOT EXISTS hour_outcomes (
+                    hour_key TEXT PRIMARY KEY,
+                    p_start REAL,
+                    p_end REAL,
+                    outcome TEXT,
+                    change_pct REAL,
+                    timestamp TEXT
+                )
+            ''')
+            
+            # Insert outcome
+            cursor.execute(f'''
+                INSERT OR REPLACE INTO hour_outcomes 
+                (hour_key, p_start, p_end, outcome, change_pct, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (hour_key, p_start, p_end, outcome, change_pct, datetime.now(UTC).isoformat()))
+            
+    except Exception as e:
+        print(f"    ⚠️ DB error storing outcome: {e}")
 
 # === MAIN EXECUTION ===
 if __name__ == "__main__":
