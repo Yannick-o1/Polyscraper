@@ -105,7 +105,7 @@ POLYMARKET_CHAIN_ID = 137
 BANKROLL = 0.30  # Your current balance
 BANKROLL_FRACTION = 0.8  # Use 80% of bankroll for sizing
 PROBABILITY_DELTA_DEADZONE_THRESHOLD = 3.0  # 3pp threshold
-MINIMUM_ORDER_SIZE_SHARES = 0.01
+MINIMUM_ORDER_SIZE_SHARES = 5.0  # Polymarket minimum is 5 shares
 
 # Rate limiting
 CYCLE_DELAY_SECONDS = 2.0
@@ -128,21 +128,27 @@ state = TradingState()
 
 # --- Rate Limiting ---
 def wait_for_rate_limit():
-    """Ensure we don't exceed API rate limits."""
+    """Smart rate limiting - less aggressive, more efficient."""
     now = time.time()
     
-    # Remove calls older than 1 minute
-    while state.api_call_times and state.api_call_times[0] < now - 60:
+    # Remove old API calls (older than 1 minute)
+    while state.api_call_times and now - state.api_call_times[0] > 60:
         state.api_call_times.popleft()
     
-    # If we're approaching the limit, wait
-    if len(state.api_call_times) >= API_CALLS_PER_MINUTE * 0.8:  # 80% of limit
-        sleep_time = 60 - (now - state.api_call_times[0])
-        if sleep_time > 0:
-            print(f"Rate limit protection: sleeping {sleep_time:.1f}s")
-            time.sleep(sleep_time)
+    # Check if we're near the limit
+    calls_in_last_minute = len(state.api_call_times)
     
-    state.api_call_times.append(now)
+    if calls_in_last_minute >= API_CALLS_PER_MINUTE * 0.8:  # 80% of limit
+        # Calculate smarter delay
+        oldest_call = state.api_call_times[0] if state.api_call_times else now
+        time_to_wait = max(0, 60 - (now - oldest_call) + 1)
+        
+        if time_to_wait > 0.1:  # Only sleep if meaningful
+            print(f"Rate limit protection: sleeping {time_to_wait:.1f}s")
+            time.sleep(time_to_wait)
+    
+    # Record this API call
+    state.api_call_times.append(time.time())
 
 def get_or_set_hour_start_price(currency, current_price):
     """Get or set the exact hour start price using caching."""
@@ -560,7 +566,9 @@ def manage_positions_dynamic(currency, delta, token_id_yes, token_id_no, price_y
         # 3. Calculate adjustment needed
         position_adjustment = target_net - current_net
         
-        # 4. Execute adjustment if significant enough
+        # 4. Execute adjustment if significant enough and affordable
+        min_trade_cost = MINIMUM_ORDER_SIZE_SHARES * max(price_yes, 1-price_yes)
+        
         if abs(position_adjustment) < MINIMUM_ORDER_SIZE_SHARES:
             return {
                 "executed": False, 
@@ -568,6 +576,18 @@ def manage_positions_dynamic(currency, delta, token_id_yes, token_id_no, price_y
                 "current_pos": f"{current_net:+.2f}",
                 "target_pos": f"{target_net:+.2f}",
                 "adjustment": f"{position_adjustment:+.2f}"
+            }
+        
+        # Check if we can afford the minimum trade
+        if min_trade_cost > bankroll * 0.9:  # Leave some buffer
+            return {
+                "executed": False,
+                "reason": "insufficient_funds_for_minimum",
+                "current_pos": f"{current_net:+.2f}",
+                "target_pos": f"{target_net:+.2f}",
+                "adjustment": f"{position_adjustment:+.2f}",
+                "min_cost": f"${min_trade_cost:.2f}",
+                "balance": f"${bankroll:.2f}"
             }
         
         # 5. Place adjustment order
@@ -817,7 +837,12 @@ def trade_currency_once(currency):
                 print(f"    📊 Position: {current_pos} → {target_pos} (Δ{adjustment})")
             elif trade_result.get("reason") == "position_aligned":
                 print(f"    ✅ ALIGNED: Position {current_pos} matches target {target_pos}")
-            elif trade_result["balance_issue"]:
+            elif trade_result.get("reason") == "insufficient_funds_for_minimum":
+                min_cost = trade_result.get('min_cost', 'N/A')
+                balance = trade_result.get('balance', 'N/A')
+                print(f"    💸 TOO SMALL: Need {min_cost} for 5 shares, have {balance}")
+                print(f"    📊 Position: {current_pos} → {target_pos} (want Δ{adjustment})")
+            elif trade_result.get("balance_issue"):
                 print(f"    💸 SKIPPED: Insufficient balance")
                 print(f"    📊 Position: {current_pos} → {target_pos} (need Δ{adjustment})")
             else:
