@@ -625,11 +625,11 @@ def initialize_system():
             model_file = f"{currency}_lgbm.txt"
             if os.path.exists(model_file):
                 state.models[currency] = lgb.Booster(model_file=model_file)
-                        print(f"\033[32m✅ {currency.upper()} model loaded\033[0m")
-    else:
-        print(f"\033[33m⚠️ {currency.upper()} model file not found\033[0m")
-except Exception as e:
-    print(f"\033[31m❌ Error loading {currency.upper()} model: {e}\033[0m")
+                print(f"\033[32m✅ {currency.upper()} model loaded\033[0m")
+            else:
+                print(f"\033[33m⚠️ {currency.upper()} model file not found\033[0m")
+        except Exception as e:
+            print(f"\033[31m❌ Error loading {currency.upper()} model: {e}\033[0m")
     
     # Initialize mock trading
     if MOCK_TRADING_ENABLED:
@@ -834,9 +834,9 @@ def execute_mock_trading(currency, prediction, market_price, spot_price):
         # Debug: Show current state
         if old_position['shares'] > 0:
             old_pos_value = old_position['shares'] * (market_price if old_position['direction'] == 'UP' else (1 - market_price))
-                    print(f"    \033[33m💰 Mock {currency.upper()}: Delta={delta:+.1%} | Current: {old_position['shares']:.2f} {old_position['direction']} = ${old_pos_value:.2f}\033[0m")
-    else:
-        print(f"    \033[33m💰 Mock {currency.upper()}: Delta={delta:+.1%} | Current: No position\033[0m")
+            print(f"    \033[33m💰 Mock {currency.upper()}: Delta={delta:+.1%} | Current: {old_position['shares']:.2f} {old_position['direction']} = ${old_pos_value:.2f}\033[0m")
+        else:
+            print(f"    \033[33m💰 Mock {currency.upper()}: Delta={delta:+.1%} | Current: No position\033[0m")
         
         # Determine target position using Kelly criterion
         target_direction = None
