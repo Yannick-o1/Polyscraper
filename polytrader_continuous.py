@@ -554,8 +554,9 @@ def trade_currency_cycle(currency):
         # Create timestamp for this cycle
         timestamp = datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')
         
-        # Store original decimal values in cache (before scaling)
-        save_data_point(currency, timestamp, market_name, token_yes, best_bid, best_ask, spot_price, ofi, prediction)
+        # Store original decimal values for cache
+        original_bid = best_bid
+        original_ask = best_ask
         
         # Scale prices for database storage (decimal to integer)
         best_bid = best_bid * 100 if best_bid is not None else None
@@ -571,6 +572,9 @@ def trade_currency_cycle(currency):
         start = time.time()
         prediction = calculate_model_prediction(currency, spot_price, ofi, market_price)
         timings['prediction'] = time.time() - start
+        
+        # Store data in cache (after prediction is calculated)
+        save_data_point(currency, timestamp, market_name, token_yes, original_bid, original_ask, spot_price, ofi, prediction)
         
         # Step 6: Execute trading logic
         start = time.time()
