@@ -550,6 +550,7 @@ def continuous_trading_loop():
     """Main continuous trading loop."""
     currencies = list(CURRENCY_CONFIG.keys())
     cycle_count = 0
+    currency_index = 0  # Track which currency to trade this cycle
     
     print(f"\n🔄 Starting continuous loop: {' → '.join(c.upper() for c in currencies)}")
     print(f"⏱️ Cycle delay: {CYCLE_DELAY_SECONDS}s | 💾 DB writes: Every cycle")
@@ -561,17 +562,18 @@ def continuous_trading_loop():
             cycle_count += 1
             
             timestamp = datetime.now(UTC).strftime('%H:%M:%S')
-            print(f"\n\n⚡ {timestamp} [Cycle {cycle_count}]")
+            current_currency = currencies[currency_index]
+            print(f"\n\n⚡ {timestamp} [Cycle {cycle_count}] - {current_currency.upper()}")
             
             # Cancel all open orders from previous cycles for maximum dynamism
             if TRADING_ENABLED:
                 cancel_all_open_orders()
             
-            # Trade each currency
-            for currency in currencies:
-                if not state.running:
-                    break
-                trade_currency_cycle(currency)
+            # Trade current currency
+            trade_currency_cycle(current_currency)
+            
+            # Move to next currency for next cycle
+            currency_index = (currency_index + 1) % len(currencies)
             
             print("\n" + "─"*50)  # Clear separator between cycles
             
