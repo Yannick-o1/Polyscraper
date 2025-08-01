@@ -494,9 +494,7 @@ def trade_currency_cycle(currency):
         )
         timings['trading'] = time.time() - start
         
-        # Log results with detailed timing
-        total_time = sum(timings.values())
-        timing_str = " | ".join([f"{k}:{v:.1f}s" for k, v in timings.items()])
+        # Log results
         
         if prediction:
             delta = (prediction - market_price) * 100
@@ -504,8 +502,6 @@ def trade_currency_cycle(currency):
             print(f"  🔸 {currency.upper()}: {prediction*100:.1f}% vs {market_price*100:.1f}% (Δ{delta:+.1f}pp) → {action}")
         else:
             print(f"  🔸 {currency.upper()}: P=N/A M={market_price*100:.1f}%")
-        
-        print(f"    ⏱️ {timing_str} | total:{total_time:.1f}s")
         
         # Display trade result with position info
         if trade_result["executed"]:
@@ -581,7 +577,7 @@ def continuous_trading_loop():
                     break
                 trade_currency_cycle(currency)
             
-            print()  # Add blank line between cycles
+            print("\n" + "="*50)  # Clear separator between cycles
             
             # Sleep until next cycle
             cycle_time = time.time() - cycle_start
