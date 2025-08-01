@@ -111,7 +111,6 @@ MINIMUM_ORDER_SIZE_SHARES = 0.01
 CYCLE_DELAY_SECONDS = 2.0
 DB_WRITE_INTERVAL_SECONDS = 60
 API_CALLS_PER_MINUTE = 100
-state.api_calls = deque()
 
 # --- Global State ---
 class TradingState:
