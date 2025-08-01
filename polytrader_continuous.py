@@ -58,7 +58,7 @@ BANKROLL_FRACTION = 0.8
 PROBABILITY_DELTA_THRESHOLD = 3.0
 MINIMUM_ORDER_SIZE_SHARES = 5.0
 CYCLE_DELAY_SECONDS = 2.0
-DB_WRITE_INTERVAL_SECONDS = 60
+# DB_WRITE_INTERVAL_SECONDS = 60  # Removed - now writing every cycle
 API_CALLS_PER_MINUTE = 80
 
 # Environment
@@ -74,7 +74,7 @@ class TradingState:
         self.models = {}
         self.polymarket_client = None
         self.data_cache = defaultdict(lambda: deque(maxlen=100))
-        self.last_db_write = defaultdict(float)
+# self.last_db_write = defaultdict(float)  # Removed - writing every cycle now
         self.api_call_times = deque(maxlen=1000)
         self.running = True
         self.hour_start_cache = {}  # Cache p_start prices
@@ -137,7 +137,7 @@ def get_hour_start_price(currency, current_crypto_price):
             # Use opening price of the first minute of the hour
             p_start = float(klines[0][1])  # open price
             state.hour_start_cache[hour_key][currency] = p_start
-            print(f"📌 {currency.upper()}: Fetched exact hour start price ${p_start:.2f} from Binance for {hour_key}")
+            print(f"🔒 {currency.upper()}: Fetched exact hour start price ${p_start:.2f} from Binance for {hour_key}")
             return p_start
             
     except Exception as e:
@@ -145,7 +145,7 @@ def get_hour_start_price(currency, current_crypto_price):
     
     # Fallback to current price if Binance call fails
     state.hour_start_cache[hour_key][currency] = current_crypto_price
-    print(f"📌 {currency.upper()}: Using current price ${current_crypto_price:.2f} as fallback for {hour_key}")
+    print(f"🔒 {currency.upper()}: Using current price ${current_crypto_price:.2f} as fallback for {hour_key}")
     return current_crypto_price
 
 def get_market_data(currency):
@@ -399,30 +399,29 @@ def save_data_point(currency, timestamp, market_name, token_id_yes, best_bid, be
     data_point = (timestamp, market_name, token_id_yes, best_bid, best_ask, spot_price, ofi, prediction)
     state.data_cache[currency].append(data_point)
 
-def write_cached_data_if_needed(currency):
-    """Write cached data to database if interval has passed."""
-    now = time.time()
-    if now - state.last_db_write[currency] >= DB_WRITE_INTERVAL_SECONDS:
-        if state.data_cache[currency]:
-            try:
-                config = CURRENCY_CONFIG[currency]
-                latest_data = state.data_cache[currency][-1]
-                timestamp, market_name, token_id, best_bid, best_ask, spot_price, ofi, prediction = latest_data
-                
-                with sqlite3.connect(f"{currency}_polyscraper.db") as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(f'''
-                        INSERT INTO polydata (timestamp, market_name, token_id, best_bid, best_ask, {config['db_column']}, ofi, p_up_prediction)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', latest_data)
-                
-                # Calculate and display model features using CRYPTO prices
-                p_start = get_hour_start_price(currency, spot_price)
-                r = (spot_price / p_start - 1) if p_start > 0 else 0
-                current_minute = datetime.now(UTC).minute
-                tau = max(1 - (current_minute / 60), 0.01)
-                
-                # Get volatility from recent data
+def write_to_database(currency):
+    """Write latest data point to database every cycle."""
+    if state.data_cache[currency]:
+        try:
+            config = CURRENCY_CONFIG[currency]
+            latest_data = state.data_cache[currency][-1]
+            timestamp, market_name, token_id, best_bid, best_ask, spot_price, ofi, prediction = latest_data
+            
+            with sqlite3.connect(f"{currency}_polyscraper.db") as conn:
+                cursor = conn.cursor()
+                cursor.execute(f'''
+                    INSERT INTO polydata (timestamp, market_name, token_id, best_bid, best_ask, {config['db_column']}, ofi, p_up_prediction)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', latest_data)
+            
+            # Calculate and display model features using CRYPTO prices
+            p_start = get_hour_start_price(currency, spot_price)
+            r = (spot_price / p_start - 1) if p_start > 0 else 0
+            current_minute = datetime.now(UTC).minute
+            tau = max(1 - (current_minute / 60), 0.01)
+            
+            # Get volatility from recent data
+            with sqlite3.connect(f"{currency}_polyscraper.db") as conn:
                 cursor = conn.cursor()
                 cursor.execute(f"""
                     SELECT {config['db_column']} FROM polydata 
@@ -430,25 +429,22 @@ def write_cached_data_if_needed(currency):
                     ORDER BY timestamp DESC LIMIT 20
                 """)
                 recent_prices = [row[0] for row in cursor.fetchall()]
+            
+            if len(recent_prices) >= 20:
+                price_series = pd.Series(recent_prices[::-1])
+                log_returns = np.log(price_series).diff()
+                rolling_vol = log_returns.rolling(window=20, min_periods=2).std()
+                vol = rolling_vol.iloc[-1] * np.sqrt(60) if not rolling_vol.empty else 0.01
+            else:
+                vol = 0.01
                 
-                if len(recent_prices) >= 20:
-                    price_series = pd.Series(recent_prices[::-1])
-                    log_returns = np.log(price_series).diff()
-                    rolling_vol = log_returns.rolling(window=20, min_periods=2).std()
-                    vol = rolling_vol.iloc[-1] * np.sqrt(60) if not rolling_vol.empty else 0.01
-                else:
-                    vol = 0.01
-                    
-                if pd.isna(vol) or vol <= 0:
-                    vol = 0.01
-                
-                print(f"📝 {currency.upper()}: DB written ({len(state.data_cache[currency])} points)")
-                print(f"    📊 Features: ofi={ofi:.4f} | r={r:.4f} | p_start=${p_start:.2f} | vol={vol:.4f} | tau={tau:.3f}")
-                
-                state.last_db_write[currency] = now
-                
-            except Exception as e:
-                print(f"❌ DB write error for {currency}: {e}")
+            if pd.isna(vol) or vol <= 0:
+                vol = 0.01
+            
+            print(f"    ⚙️ Features: ofi={ofi:.4f} | r={r:.4f} | p_start=${p_start:.2f} | vol={vol:.4f} | tau={tau:.3f}")
+            
+        except Exception as e:
+            print(f"❌ DB write error for {currency}: {e}")
 
 def trade_currency_cycle(currency):
     """Execute one complete trading cycle for a currency."""
@@ -499,32 +495,32 @@ def trade_currency_cycle(currency):
         if prediction:
             delta = (prediction - market_price) * 100
             action = "BUY UP" if delta > PROBABILITY_DELTA_THRESHOLD else "BUY DOWN" if delta < -PROBABILITY_DELTA_THRESHOLD else "HOLD"
-            print(f"  🔸 {currency.upper()}: {prediction*100:.1f}% vs {market_price*100:.1f}% (Δ{delta:+.1f}pp) → {action}")
+            print(f"  📈 {currency.upper()}: {prediction*100:.1f}% vs {market_price*100:.1f}% (Δ{delta:+.1f}pp) → {action}")
         else:
-            print(f"  🔸 {currency.upper()}: P=N/A M={market_price*100:.1f}%")
+            print(f"  📈 {currency.upper()}: P=N/A M={market_price*100:.1f}%")
         
         # Display trade result with position info
         if trade_result["executed"]:
-            print(f"    💰 SIMULATED: {trade_result['direction']} exposure ${trade_result['target_exposure']:.2f}")
-            print(f"    📊 YES: {trade_result['current_yes']:.2f}→{trade_result['target_yes']:.2f} | NO: {trade_result['current_no']:.2f}→{trade_result['target_no']:.2f}")
+            print(f"    🟢 SIMULATED: {trade_result['direction']} exposure ${trade_result['target_exposure']:.2f}")
+            print(f"    ▶️ YES: {trade_result['current_yes']:.2f}→{trade_result['target_yes']:.2f} | NO: {trade_result['current_no']:.2f}→{trade_result['target_no']:.2f}")
         elif trade_result["reason"] == "delta_too_small":
-            print(f"    ⏸️ FLAT: Delta {trade_result['delta']:.1f}pp below threshold ({PROBABILITY_DELTA_THRESHOLD}pp)")
+            print(f"    ⚪ FLAT: Delta {trade_result['delta']:.1f}pp below threshold ({PROBABILITY_DELTA_THRESHOLD}pp)")
         elif trade_result["reason"] == "insufficient_funds":
-            print(f"    💸 TOO EXPENSIVE: Need ${trade_result['needed']:.2f}, have ${trade_result['available']:.2f}")
-            print(f"    📊 YES: {trade_result['current_yes']:.2f}→{trade_result['target_yes']:.2f} | NO: {trade_result['current_no']:.2f}→{trade_result['target_no']:.2f}")
+            print(f"    🔴 TOO EXPENSIVE: Need ${trade_result['needed']:.2f}, have ${trade_result['available']:.2f}")
+            print(f"    ▶️ YES: {trade_result['current_yes']:.2f}→{trade_result['target_yes']:.2f} | NO: {trade_result['current_no']:.2f}→{trade_result['target_no']:.2f}")
         elif trade_result["reason"] == "adjustment_too_small":
-            print(f"    📏 TOO SMALL: Adjustment {trade_result['adjustment']} below minimum")
-            print(f"    📊 YES: {trade_result['current_yes']:.2f}→{trade_result['target_yes']:.2f} | NO: {trade_result['current_no']:.2f}→{trade_result['target_no']:.2f}")
+            print(f"    🟡 TOO SMALL: Adjustment {trade_result['adjustment']} below minimum")
+            print(f"    ▶️ YES: {trade_result['current_yes']:.2f}→{trade_result['target_yes']:.2f} | NO: {trade_result['current_no']:.2f}→{trade_result['target_no']:.2f}")
         elif trade_result["reason"] == "position_aligned":
-            print(f"    ✅ ALIGNED: Position already optimal")
-            print(f"    📊 YES: {trade_result['current_yes']:.2f}→{trade_result['target_yes']:.2f} | NO: {trade_result['current_no']:.2f}→{trade_result['target_no']:.2f}")
+            print(f"    🟢 ALIGNED: Position already optimal")
+            print(f"    ▶️ YES: {trade_result['current_yes']:.2f}→{trade_result['target_yes']:.2f} | NO: {trade_result['current_no']:.2f}→{trade_result['target_no']:.2f}")
         
         # Save data
         timestamp = datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')
         save_data_point(currency, timestamp, market_name, token_yes, best_bid, best_ask, spot_price, ofi, prediction)
         
-        # Write to DB if needed
-        write_cached_data_if_needed(currency)
+        # Write to database every cycle
+        write_to_database(currency)
         
         return True
         
@@ -556,7 +552,7 @@ def continuous_trading_loop():
     cycle_count = 0
     
     print(f"\n🔄 Starting continuous loop: {' → '.join(c.upper() for c in currencies)}")
-    print(f"⏱️ Cycle delay: {CYCLE_DELAY_SECONDS}s | 💾 DB writes: {DB_WRITE_INTERVAL_SECONDS}s")
+    print(f"⏱️ Cycle delay: {CYCLE_DELAY_SECONDS}s | 💾 DB writes: Every cycle")
     print("-" * 60)
     
     try:
@@ -577,7 +573,7 @@ def continuous_trading_loop():
                     break
                 trade_currency_cycle(currency)
             
-            print("\n" + "="*50)  # Clear separator between cycles
+            print("\n" + "─"*50)  # Clear separator between cycles
             
             # Sleep until next cycle
             cycle_time = time.time() - cycle_start
