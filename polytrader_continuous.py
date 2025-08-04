@@ -80,7 +80,7 @@ class TradingState:
         self.current_bankroll = None  # Will be fetched from Polymarket
         self.last_bankroll_check = 0  # Track when we last checked bankroll
         self.last_outcome_update = {}  # Track last outcome update per currency to prevent duplicates
-        
+        self.last_cache_minute = {}  # Track last minute when cache was updated per currency
 
 
 state = TradingState()
@@ -823,10 +823,23 @@ def display_trade_result(trade_result):
         if 'target_yes' in trade_result and 'target_no' in trade_result:
             print(f"  🟥 TARGET POSITIONS: YES {trade_result['target_yes']:.2f} | NO {trade_result['target_no']:.2f}")
 
-def save_data_point(currency, timestamp, market_name, token_id_yes, best_bid, best_ask, spot_price, ofi, prediction):
-    """Save data point to cache."""
+def save_data_point_if_new_minute(currency, timestamp, market_name, token_id_yes, best_bid, best_ask, spot_price, ofi, prediction):
+    """Save data point to cache only if we're in a new minute (maintain 1-minute intervals like polyscraper.py)."""
+    current_time = datetime.now(UTC)
+    current_minute_key = current_time.strftime('%Y-%m-%d %H:%M')  # YYYY-MM-DD HH:MM format
+    
+    # Check if we've already added data for this minute
+    if currency in state.last_cache_minute and state.last_cache_minute[currency] == current_minute_key:
+        return  # Skip - already have data for this minute
+    
+    # This is a new minute, add the data point
     data_point = (timestamp, market_name, token_id_yes, best_bid, best_ask, spot_price, ofi, prediction)
     state.data_cache[currency].append(data_point)
+    state.last_cache_minute[currency] = current_minute_key
+    
+    # Optional: Log when we add new volatility data (only for first 5 minutes of each hour)
+    if current_time.minute <= 5:
+        print(f"    ⬜ {currency.upper()}: Added 1-minute data point (cache size: {len(state.data_cache[currency])})")
 
 def ensure_outcome_column_exists(currency):
     """Ensure the outcome column exists in the database table."""
@@ -1018,8 +1031,8 @@ def trade_currency_cycle(currency):
         prediction = calculate_model_prediction(currency, spot_price, ofi, market_price)
         timings['prediction'] = time.time() - start
         
-        # Store data in cache (after prediction is calculated)
-        save_data_point(currency, timestamp, market_name, token_yes, original_bid, original_ask, spot_price, ofi, prediction)
+        # Store data in cache only if we're in a new minute (maintain 1-minute intervals)
+        save_data_point_if_new_minute(currency, timestamp, market_name, token_yes, original_bid, original_ask, spot_price, ofi, prediction)
         
         # Step 6: Execute trading logic
         start = time.time()
@@ -1031,7 +1044,6 @@ def trade_currency_cycle(currency):
         
         
         # === ORGANIZED OUTPUT DISPLAY ===
-        print(f"\n⬜ {currency.upper()} CYCLE")
         
         # 1. Market Data & Prediction
         if prediction:
@@ -1206,16 +1218,10 @@ def continuous_trading_loop():
             
             
             
-            # Cancel orders only when we're back to the same currency
-            if TRADING_ENABLED:
-                # Track which currency we last cancelled orders for
-                if not hasattr(state, 'last_cancelled_currency'):
-                    state.last_cancelled_currency = None
-                
-                # Only cancel if we're on a different currency than last time
-                if state.last_cancelled_currency != current_currency:
-                    cancel_all_open_orders()
-                    state.last_cancelled_currency = current_currency
+            # Cancel all open orders every 3 cycles
+            if TRADING_ENABLED and cycle_count % 3 == 1:
+                print(f"🟥 CANCELLING ALL OPEN ORDERS (Cycle {cycle_count})")
+                cancel_all_open_orders()
             
             # Trade current currency
             trade_currency_cycle(current_currency)
