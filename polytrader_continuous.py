@@ -1122,6 +1122,11 @@ def get_current_bankroll():
         allowance = float(usdc_account_info.get("allowance", 0)) / 1_000_000.0
         if allowance < usdc_balance:
             print(f"  ⚠️ Allowance (${allowance:.2f}) is less than balance (${usdc_balance:.2f})")
+            print(f"  🔧 Attempting to approve USDC allowance...")
+            if approve_usdc_allowance():
+                print(f"  ✅ Allowance approved - trading should work now")
+            else:
+                print(f"  ❌ Failed to approve allowance - please approve manually on Polymarket website")
         
         return usdc_balance
         
@@ -1160,6 +1165,34 @@ def get_current_position(token_id_yes, token_id_no):
     except Exception:
         # Don't let position lookup errors stop trading
         return 0, 0
+
+def approve_usdc_allowance():
+    """Approve USDC allowance for Polymarket trading."""
+    if not state.polymarket_client:
+        print(f"  ❌ Cannot approve allowance: Polymarket client not available")
+        return False
+    
+    try:
+        wait_for_rate_limit()
+        
+        # Approve USDC allowance
+        approval_params = BalanceAllowanceParams(
+            asset_type=AssetType.COLLATERAL,
+            signature_type=-1
+        )
+        
+        response = state.polymarket_client.approve_allowance(approval_params)
+        
+        if response.get('success', False):
+            print(f"  ✅ USDC allowance approved successfully")
+            return True
+        else:
+            print(f"  ❌ Failed to approve USDC allowance: {response.get('errorMsg', 'Unknown error')}")
+            return False
+            
+    except Exception as e:
+        print(f"  ❌ Error approving allowance: {e}")
+        return False
 
 
 # === MAIN EXECUTION ===
