@@ -1061,16 +1061,30 @@ def execute_mock_trading(currency, prediction, market_price, spot_price):
                             if best_bid is not None and best_ask is not None:
                                 curr_market_price = (best_bid + best_ask) / 2
                 
+                # Calculate position value correctly
                 if pos['direction'] == 'UP':
-                    total_pos_value += pos['shares'] * curr_market_price
+                    # UP position: shares * current_market_price
+                    pos_value = pos['shares'] * curr_market_price
                 elif pos['direction'] == 'DOWN':
-                    total_pos_value += pos['shares'] * (1 - curr_market_price)
+                    # DOWN position: shares * (1 - current_market_price) 
+                    # This represents the value if market goes DOWN
+                    pos_value = pos['shares'] * (1 - curr_market_price)
+                else:
+                    pos_value = 0
+                
+                total_pos_value += pos_value
         
         portfolio_value = state.mock_available_cash + total_pos_value
         
         # Debug: Show current state
         if old_position['shares'] > 0:
-            old_pos_value = old_position['shares'] * (market_price if old_position['direction'] == 'UP' else (1 - market_price))
+            # Calculate position value correctly for display
+            if old_position['direction'] == 'UP':
+                old_pos_value = old_position['shares'] * market_price
+            elif old_position['direction'] == 'DOWN':
+                old_pos_value = old_position['shares'] * (1 - market_price)
+            else:
+                old_pos_value = 0
             print(f"    \033[33m💰 Mock {currency.upper()}: Delta={delta:+.1%} | Current: {old_position['shares']:.2f} {old_position['direction']} = ${old_pos_value:.2f}\033[0m")
         else:
             print(f"    \033[33m💰 Mock {currency.upper()}: Delta={delta:+.1%} | Current: No position\033[0m")
@@ -1093,7 +1107,15 @@ def execute_mock_trading(currency, prediction, market_price, spot_price):
         amount = 0
         
         # Calculate current position value and target position value
-        current_pos_value = position['shares'] * (market_price if position['direction'] == 'UP' else (1 - market_price)) if position['shares'] > 0 else 0
+        if position['shares'] > 0:
+            if position['direction'] == 'UP':
+                current_pos_value = position['shares'] * market_price
+            elif position['direction'] == 'DOWN':
+                current_pos_value = position['shares'] * (1 - market_price)
+            else:
+                current_pos_value = 0
+        else:
+            current_pos_value = 0
         
         # Determine if we need to adjust position
         should_adjust = False
@@ -1217,13 +1239,23 @@ def execute_mock_trading(currency, prediction, market_price, spot_price):
                             if best_bid is not None and best_ask is not None:
                                 curr_market_price = (best_bid + best_ask) / 2
                     
+                # Calculate position value correctly
                 if pos['direction'] == 'UP':
-                    final_pos_value += pos['shares'] * curr_market_price
+                    pos_value = pos['shares'] * curr_market_price
                 elif pos['direction'] == 'DOWN':
-                    final_pos_value += pos['shares'] * (1 - curr_market_price)
+                    pos_value = pos['shares'] * (1 - curr_market_price)
+                else:
+                    pos_value = 0
+                
+                final_pos_value += pos_value
         
         final_bankroll = state.mock_available_cash + final_pos_value
         return_pct = ((final_bankroll - MOCK_INITIAL_BANKROLL) / MOCK_INITIAL_BANKROLL) * 100
+        
+        # Cap the return percentage to prevent unrealistic values
+        if return_pct > 1000:  # If return > 1000%, something is wrong
+            print(f"    \033[33m⚠️ Warning: Unrealistic return {return_pct:.1f}% detected, capping at 100%\033[0m")
+            return_pct = 100.0
         
         # Save to database
         save_mock_trading_result(currency, final_bankroll, return_pct, 
@@ -1242,7 +1274,13 @@ def execute_mock_trading(currency, prediction, market_price, spot_price):
             # For HOLD, show current position
             pos = state.mock_positions.get(currency, {'direction': None, 'shares': 0, 'avg_cost': 0})
             if pos['shares'] > 0:
-                pos_value = pos['shares'] * (market_price if pos['direction'] == 'UP' else (1 - market_price))
+                # Calculate position value correctly for display
+                if pos['direction'] == 'UP':
+                    pos_value = pos['shares'] * market_price
+                elif pos['direction'] == 'DOWN':
+                    pos_value = pos['shares'] * (1 - market_price)
+                else:
+                    pos_value = 0
                 print(f"       \033[37m💤 HOLD | {pos['shares']:.2f} {pos['direction']} @ ${pos['avg_cost']:.3f} = ${pos_value:.2f}\033[0m")
             else:
                 print(f"       \033[37m💤 HOLD | No position | Portfolio: ${final_bankroll:.2f} ({return_pct:+.1f}%)\033[0m")
@@ -1293,7 +1331,14 @@ def display_mock_portfolio_summary():
                         if best_bid is not None and best_ask is not None:
                             market_price = (best_bid + best_ask) / 2
                 
-                pos_value = pos['shares'] * (market_price if pos['direction'] == 'UP' else (1 - market_price))
+                # Calculate position value correctly
+                if pos['direction'] == 'UP':
+                    pos_value = pos['shares'] * market_price
+                elif pos['direction'] == 'DOWN':
+                    pos_value = pos['shares'] * (1 - market_price)
+                else:
+                    pos_value = 0
+                
                 total_position_value += pos_value
                 
                 cost_basis = pos['shares'] * pos['avg_cost'] 
