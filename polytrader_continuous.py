@@ -937,8 +937,10 @@ def initialize_system():
                     host=CLOB_API_URL,
                     key=POLYMARKET_PRIVATE_KEY,
                     chain_id=137,  # Polygon
-                    proxy_address=POLYMARKET_PROXY_ADDRESS
+                    signature_type=1,  # For email/magic accounts, use 2 for browser wallets
+                    funder=POLYMARKET_PROXY_ADDRESS
                 )
+                state.polymarket_client.set_api_creds(state.polymarket_client.create_or_derive_api_creds())
                 print(f"✅ Polymarket client initialized")
                 
                 # Get initial bankroll
@@ -1061,24 +1063,13 @@ def get_current_bankroll():
     try:
         wait_for_rate_limit()
         
-        # Get USDC balance
-        balance_params = BalanceAllowanceParams(
-            asset_type=AssetType.USDC,
-            token_ids=["USDC"]  # USDC token ID
+        # Get USDC balance using the correct API method
+        usdc_balance_params = BalanceAllowanceParams(
+            asset_type=AssetType.COLLATERAL, 
+            signature_type=-1
         )
-        
-        response = state.polymarket_client.get_balances(balance_params)
-        
-        if not response or 'balances' not in response:
-            print(f"  ❌ No balance data received from Polymarket")
-            return None
-        
-        # Find USDC balance
-        usdc_balance = 0
-        for balance in response['balances']:
-            if balance.get('token_id') == 'USDC':
-                usdc_balance = float(balance.get('balance', 0))
-                break
+        usdc_account_info = state.polymarket_client.get_balance_allowance(usdc_balance_params)
+        usdc_balance = float(usdc_account_info["balance"]) / 1_000_000.0
         
         return usdc_balance
         
@@ -1094,28 +1085,25 @@ def get_current_position(token_id_yes, token_id_no):
     try:
         wait_for_rate_limit()
         
-        # Get balances for both YES and NO tokens
-        balance_params = BalanceAllowanceParams(
-            asset_type=AssetType.CONDITIONAL,
-            token_ids=[token_id_yes, token_id_no]
+        # Get YES token balance
+        yes_balance_params = BalanceAllowanceParams(
+            asset_type=AssetType.CONDITIONAL, 
+            token_id=token_id_yes, 
+            signature_type=-1
         )
+        yes_account_info = state.polymarket_client.get_balance_allowance(yes_balance_params)
+        position_yes = float(yes_account_info["balance"]) / 1_000_000.0
+
+        # Get NO token balance
+        no_balance_params = BalanceAllowanceParams(
+            asset_type=AssetType.CONDITIONAL, 
+            token_id=token_id_no, 
+            signature_type=-1
+        )
+        no_account_info = state.polymarket_client.get_balance_allowance(no_balance_params)
+        position_no = float(no_account_info["balance"]) / 1_000_000.0
         
-        response = state.polymarket_client.get_balances(balance_params)
-        
-        if not response or 'balances' not in response:
-            return 0, 0
-        
-        # Extract positions
-        yes_position = 0
-        no_position = 0
-        
-        for balance in response['balances']:
-            if balance['token_id'] == token_id_yes:
-                yes_position = float(balance.get('balance', 0))
-            elif balance['token_id'] == token_id_no:
-                no_position = float(balance.get('balance', 0))
-        
-        return yes_position, no_position
+        return position_yes, position_no
         
     except Exception:
         # Don't let position lookup errors stop trading
