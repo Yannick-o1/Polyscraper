@@ -566,7 +566,7 @@ def calculate_model_prediction(currency, current_price, ofi, market_price):
         prediction = max(0.0, min(1.0, raw_prediction))
         
         # Enhanced debugging - show more details at hour start (first 5 minutes)
-        if current_minute <= 5 or currency == 'btc':  # Always debug BTC, and all currencies in first 5 minutes
+        if current_minute <= 5:  # Debug all currencies in first 5 minutes of each hour
             print(f"    🔍 {currency.upper()} Features: r={r:.6f} r_scaled={r_scaled:.6f} τ={tau:.3f} vol={vol:.4f}({vol_source}) ofi={ofi:.4f}")
             print(f"    🔍 {currency.upper()} p_start=${p_start:.8f} current=${current_price:.8f} minute={current_minute}")
             print(f"    🔍 {currency.upper()} Prediction: raw={raw_prediction:.4f} bounded={prediction:.4f} market={market_price:.4f}")
@@ -801,27 +801,27 @@ def log_error(operation, currency, error):
 def display_trade_result(trade_result):
     """Display trade execution result with appropriate formatting."""
     if trade_result.get("executed", False):
-        print(f"  ✅ TRADE EXECUTED: {trade_result['direction']} exposure ${trade_result['target_exposure']:.2f}")
-        print(f"  🎯 TARGET POSITIONS: YES {trade_result['target_yes']:.2f} | NO {trade_result['target_no']:.2f}")
+        print(f"  🟢 TRADE EXECUTED: {trade_result['direction']} exposure ${trade_result['target_exposure']:.2f}")
+        print(f"  🟥 TARGET POSITIONS: YES {trade_result['target_yes']:.2f} | NO {trade_result['target_no']:.2f}")
     elif trade_result["reason"] == "delta_too_small":
-        print(f"  ⚪ NO TRADE: Delta {trade_result['delta']:.1f}pp below threshold ({PROBABILITY_DELTA_THRESHOLD}pp)")
+        print(f"  ⬜ NO TRADE: Delta {trade_result['delta']:.1f}pp below threshold ({PROBABILITY_DELTA_THRESHOLD}pp)")
         if 'target_yes' in trade_result and 'target_no' in trade_result:
-            print(f"  🗑️ CLEARING: Target YES {trade_result['target_yes']:.2f} | NO {trade_result['target_no']:.2f}")
+            print(f"  🟨 CLEARING: Target YES {trade_result['target_yes']:.2f} | NO {trade_result['target_no']:.2f}")
     elif trade_result["reason"] == "insufficient_funds":
-        print(f"  🔴 NO TRADE: Need ${trade_result['needed']:.2f}, have ${trade_result['available']:.2f}")
+        print(f"  🟥 NO TRADE: Need ${trade_result['needed']:.2f}, have ${trade_result['available']:.2f}")
     elif trade_result["reason"] == "adjustment_too_small":
-        print(f"  🟡 NO TRADE: Adjustment {trade_result['adjustment']} below minimum")
+        print(f"  🟨 NO TRADE: Adjustment {trade_result['adjustment']} below minimum")
     elif trade_result["reason"] == "position_aligned":
         print(f"  🟢 NO TRADE: Position already optimal")
-        print(f"  🎯 TARGET POSITIONS: YES {trade_result['target_yes']:.2f} | NO {trade_result['target_no']:.2f}")
+        print(f"  🟥 TARGET POSITIONS: YES {trade_result['target_yes']:.2f} | NO {trade_result['target_no']:.2f}")
     elif trade_result["reason"] == "no_bankroll_data":
-        print(f"  🔴 NO TRADE: Cannot fetch bankroll")
+        print(f"  🟥 NO TRADE: Cannot fetch bankroll")
     elif trade_result["reason"] == "delta_too_extreme":
-        print(f"  ⚪ NO TRADE: Delta {trade_result['delta']:.1f}pp is too extreme (>20pp)")
+        print(f"  ⬜ NO TRADE: Delta {trade_result['delta']:.1f}pp is too extreme (>20pp)")
     else:
-        print(f"  ⚪ NO TRADE: {trade_result['reason']}")
+        print(f"  ⬜ NO TRADE: {trade_result['reason']}")
         if 'target_yes' in trade_result and 'target_no' in trade_result:
-            print(f"  🎯 TARGET POSITIONS: YES {trade_result['target_yes']:.2f} | NO {trade_result['target_no']:.2f}")
+            print(f"  🟥 TARGET POSITIONS: YES {trade_result['target_yes']:.2f} | NO {trade_result['target_no']:.2f}")
 
 def save_data_point(currency, timestamp, market_name, token_id_yes, best_bid, best_ask, spot_price, ofi, prediction):
     """Save data point to cache."""
@@ -1031,15 +1031,15 @@ def trade_currency_cycle(currency):
         
         
         # === ORGANIZED OUTPUT DISPLAY ===
-        print(f"\n🔄 {currency.upper()} CYCLE")
+        print(f"\n⬜ {currency.upper()} CYCLE")
         
         # 1. Market Data & Prediction
         if prediction:
             delta = (prediction - market_price) * 100
             action = "BUY UP" if delta > PROBABILITY_DELTA_THRESHOLD else "BUY DOWN" if delta < -PROBABILITY_DELTA_THRESHOLD else "HOLD"
-            print(f"  📈 PREDICTION: {prediction*100:.1f}% | MARKET: {market_price*100:.1f}% | DELTA: {delta:+.1f}pp → {action}")
+            print(f"  🟩 PREDICTION: {prediction*100:.1f}% | MARKET: {market_price*100:.1f}% | DELTA: {delta:+.1f}pp → {action}")
         else:
-            print(f"  📈 PREDICTION: N/A | MARKET: {market_price*100:.1f}%")
+            print(f"  🟩 PREDICTION: N/A | MARKET: {market_price*100:.1f}%")
         
         # 2. Model Features (include volatility!)
         r = (spot_price / p_start - 1) if p_start > 0 else 0
@@ -1063,14 +1063,14 @@ def trade_currency_cycle(currency):
                             vol_hourly = latest_vol * np.sqrt(60)
                             vol_info = f"{vol_hourly:.4f} (w={window_size})"
         
-        print(f"  🔍 FEATURES: r={r:.6f} | τ={tau:.3f} | vol={vol_info} | ofi={ofi:.4f}")
-        print(f"  📊 PRICES: spot=${spot_price:.8f} | p_start=${p_start:.8f} | bid=${original_bid:.4f} | ask=${original_ask:.4f}")
+        print(f"  🟨 FEATURES: r={r:.6f} | τ={tau:.3f} | vol={vol_info} | ofi={ofi:.4f}")
+        print(f"  🟦 PRICES: spot=${spot_price:.8f} | p_start=${p_start:.8f} | bid=${original_bid:.4f} | ask=${original_ask:.4f}")
         
         # 3. Positions & Bankroll
         current_yes, current_no = get_current_position(token_yes, token_no)
         current_pos_str = f"YES {current_yes:.2f} | NO {current_no:.2f}" if (current_yes > 0 or current_no > 0) else "None"
         bankroll_str = f"${state.current_bankroll:.2f}" if state.current_bankroll is not None else "N/A"
-        print(f"  💼 POSITIONS: {current_pos_str} | BANKROLL: {bankroll_str}")
+        print(f"  🟧 POSITIONS: {current_pos_str} | BANKROLL: {bankroll_str}")
         
         # Display trade result with target positions
         display_trade_result(trade_result)
@@ -1301,8 +1301,6 @@ def get_current_bankroll():
         
         # Also check allowance
         allowance = float(usdc_account_info.get("allowance", 0)) / 1_000_000.0
-        if allowance < usdc_balance:
-            print(f"  ⚠️ Allowance (${allowance:.2f}) is less than balance (${usdc_balance:.2f})")
         
         return usdc_balance
         
