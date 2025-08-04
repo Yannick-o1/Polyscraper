@@ -626,7 +626,11 @@ def place_order(side, token_id, price, size_shares):
             print(f"  ✅ {side} order placed: {size_shares:.2f} shares @ ${optimal_price:.2f} (spread: ${spread:.2f})")
             return True
         else:
-            print(f"  ❌ Order failed: {response.get('errorMsg', 'Unknown error')}")
+            error_msg = response.get('errorMsg', 'Unknown error')
+            if 'not enough balance' in error_msg.lower() or 'allowance' in error_msg.lower():
+                print(f"  ❌ Order failed: Insufficient balance/allowance - check Polymarket account")
+            else:
+                print(f"  ❌ Order failed: {error_msg}")
             return False
             
     except Exception as e:
@@ -638,9 +642,9 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
     if not prediction or not TRADING_ENABLED:
         return {"executed": False, "reason": "no_prediction_or_disabled"}
     
-    # Get current bankroll (check every 10 minutes)
+    # Get current bankroll (check every cycle for now)
     current_time = time.time()
-    if current_time - state.last_bankroll_check > 600:  # 10 minutes
+    if current_time - state.last_bankroll_check > 60:  # Check every minute
         state.current_bankroll = get_current_bankroll()
         state.last_bankroll_check = current_time
         
@@ -706,7 +710,9 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
             "adjustment": f"{position_adjustment:+.2f}"
         }
     
-    if min_cost > state.current_bankroll * 0.9:
+    # Check if we have enough balance for the trade
+    trade_cost = abs(position_adjustment) * market_price if delta > 0 else abs(position_adjustment) * (1 - market_price)
+    if trade_cost > state.current_bankroll * 0.8:  # Use 80% of bankroll as safety
         return {
             "executed": False,
             "reason": "insufficient_funds",
@@ -716,7 +722,7 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
             "target_yes": target_yes,
             "target_no": target_no,
             "adjustment": f"{position_adjustment:+.2f}",
-            "needed": min_cost,
+            "needed": trade_cost,
             "available": state.current_bankroll
         }
     
@@ -1111,6 +1117,11 @@ def get_current_bankroll():
         )
         usdc_account_info = state.polymarket_client.get_balance_allowance(usdc_balance_params)
         usdc_balance = float(usdc_account_info["balance"]) / 1_000_000.0
+        
+        # Also check allowance
+        allowance = float(usdc_account_info.get("allowance", 0)) / 1_000_000.0
+        if allowance < usdc_balance:
+            print(f"  ⚠️ Allowance (${allowance:.2f}) is less than balance (${usdc_balance:.2f})")
         
         return usdc_balance
         
