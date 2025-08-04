@@ -81,6 +81,7 @@ class TradingState:
         self.last_bankroll_check = 0  # Track when we last checked bankroll
         self.last_outcome_update = {}  # Track last outcome update per currency to prevent duplicates
         self.last_cache_minute = {}  # Track last minute when cache was updated per currency
+        self.last_api_report_minute = None  # Track last minute when API usage was reported
 
 
 state = TradingState()
@@ -103,6 +104,32 @@ def wait_for_rate_limit():
         time.sleep(0.8)  # Brief pause near limit
     
     state.api_call_times.append(now)
+
+def report_api_usage_if_new_minute():
+    """Report API usage statistics once per minute."""
+    current_minute = datetime.now().strftime("%Y-%m-%d %H:%M")
+    
+    if state.last_api_report_minute != current_minute:
+        state.last_api_report_minute = current_minute
+        
+        # Count API calls in the last 60 seconds
+        now = time.time()
+        recent_calls = sum(1 for call_time in state.api_call_times if now - call_time <= 60)
+        
+        # Calculate usage percentage
+        usage_percent = (recent_calls / API_CALLS_PER_MINUTE) * 100
+        
+        # Choose emoji based on usage level
+        if usage_percent >= 90:
+            emoji = "🔴"  # Red - very high usage
+        elif usage_percent >= 70:
+            emoji = "🟡"  # Yellow - high usage
+        elif usage_percent >= 50:
+            emoji = "🟢"  # Green - moderate usage
+        else:
+            emoji = "🔵"  # Blue - low usage
+        
+        print(f"{emoji} API USAGE: {recent_calls}/{API_CALLS_PER_MINUTE} calls/min ({usage_percent:.1f}%)")
 
 def get_hour_start_price(currency, current_crypto_price):
     """Get exact price from Binance at the precise start of the current hour with maximum precision."""
@@ -952,28 +979,24 @@ def update_outcome_for_previous_hour(currency, current_hour_utc):
     except Exception as e:
         log_error("updating outcome", currency, e)
 
-def write_to_database(currency):
-    """Write latest data point to database every cycle."""
-    if state.data_cache[currency]:
-        try:
-            config = CURRENCY_CONFIG[currency]
-            latest_data = state.data_cache[currency][-1]
-            timestamp, market_name, token_id, best_bid, best_ask, spot_price, ofi, prediction = latest_data
-            
-            # Ensure outcome column exists
-            ensure_outcome_column_exists(currency)
-            
-            with get_db_connection(currency) as conn:
-                cursor = conn.cursor()
-                cursor.execute(f'''
-                    INSERT INTO polydata (timestamp, market_name, token_id, best_bid, best_ask, {config['db_column']}, ofi, p_up_prediction)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''', latest_data)
-            
-            # Note: Database write complete - detailed feature calculations are done in calculate_model_prediction
-            
-        except Exception as e:
-            print(f"\033[31m❌ DB write error for {currency}: {e}\033[0m")
+def write_to_database(currency, timestamp, market_name, token_id, best_bid, best_ask, spot_price, ofi, prediction):
+    """Write current cycle data point to database with fresh timestamp."""
+    try:
+        config = CURRENCY_CONFIG[currency]
+        data_tuple = (timestamp, market_name, token_id, best_bid, best_ask, spot_price, ofi, prediction)
+        
+        # Ensure outcome column exists
+        ensure_outcome_column_exists(currency)
+        
+        with get_db_connection(currency) as conn:
+            cursor = conn.cursor()
+            cursor.execute(f'''
+                INSERT INTO polydata (timestamp, market_name, token_id, best_bid, best_ask, {config['db_column']}, ofi, p_up_prediction)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', data_tuple)
+        
+    except Exception as e:
+        print(f"\033[31m❌ DB write error for {currency}: {e}\033[0m")
 
 def trade_currency_cycle(currency):
     """Execute one complete trading cycle for a currency."""
@@ -1089,8 +1112,8 @@ def trade_currency_cycle(currency):
         
         # Save data (already done above with decimal values)
         
-        # Write to database every cycle
-        write_to_database(currency)
+        # Write to database every cycle with fresh data
+        write_to_database(currency, timestamp, market_name, token_yes, best_bid, best_ask, spot_price, ofi, prediction)
         
         return True
         
@@ -1217,6 +1240,9 @@ def continuous_trading_loop():
             print(f"\n\n⚡ {timestamp} [Cycle {cycle_count}] - {current_currency.upper()}")
             
             
+            
+            # Report API usage statistics once per minute
+            report_api_usage_if_new_minute()
             
             # Cancel all open orders every 3 cycles
             if TRADING_ENABLED and cycle_count % 3 == 1:
