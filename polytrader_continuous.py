@@ -614,7 +614,7 @@ def calculate_model_prediction(currency, current_price, ofi, market_price):
         traceback.print_exc()
         return None
 
-def place_order(side, token_id, price, size_shares):
+def place_order(side, token_id, price, size_shares, current_bid=None, current_ask=None):
     """Place a BUY or SELL order on Polymarket with optimal pricing."""
     if not state.polymarket_client:
         print(f"  ❌ Cannot place order: Polymarket client not available")
@@ -623,11 +623,15 @@ def place_order(side, token_id, price, size_shares):
     try:
         wait_for_rate_limit()
         
-        # Get current best bid and ask to calculate optimal price
-        best_bid, best_ask = get_order_book_prices(token_id)
-        if not best_bid or not best_ask:
-            print(f"  ❌ Cannot get order book for optimal pricing")
-            return False
+        # Use provided order book data or fetch fresh data
+        if current_bid is not None and current_ask is not None:
+            best_bid, best_ask = current_bid, current_ask
+        else:
+            # Get current best bid and ask to calculate optimal price
+            best_bid, best_ask = get_order_book_prices(token_id)
+            if not best_bid or not best_ask:
+                print(f"  ❌ Cannot get order book for optimal pricing")
+                return False
         
         # Calculate spread and optimal price
         spread = best_ask - best_bid
@@ -756,7 +760,8 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
             "adjustment": f"{position_adjustment:+.2f}"
         }
     
-    if abs(position_adjustment) < MINIMUM_ORDER_SIZE_SHARES:
+    # Allow position clearing (selling) even if adjustment is small
+    if abs(position_adjustment) < MINIMUM_ORDER_SIZE_SHARES and position_adjustment >= 0:
         return {
             "executed": False,
             "reason": "adjustment_too_small",
@@ -789,7 +794,7 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
         # Need to buy more
         if delta > 0:
             # Buy YES tokens
-            success = place_order("BUY", token_yes, best_ask, abs(position_adjustment))
+            success = place_order("BUY", token_yes, best_ask, abs(position_adjustment), best_bid, best_ask)
         else:
             # Buy NO tokens  
             success = place_order("BUY", token_no, 1 - best_bid, abs(position_adjustment))
@@ -797,7 +802,7 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
         # Need to sell
         if current_yes > 0:
             # Sell YES tokens
-            success = place_order("SELL", token_yes, best_bid, abs(position_adjustment))
+            success = place_order("SELL", token_yes, best_bid, abs(position_adjustment), best_bid, best_ask)
         elif current_no > 0:
             # Sell NO tokens
             success = place_order("SELL", token_no, 1 - best_ask, abs(position_adjustment))
