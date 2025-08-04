@@ -635,11 +635,10 @@ def place_order(side, token_id, price, size_shares, current_bid=None, current_as
         
         # Calculate spread and optimal price
         spread = best_ask - best_bid
-        spread_percentage = (spread / best_bid) * 100
         
-        # Don't trade if spread is too wide (>20%)
-        if spread_percentage > 20.0:
-            print(f"  ❌ Spread too wide: {spread_percentage:.1f}% (${spread:.2f}) - skipping trade")
+        # Don't trade if spread is too wide (>20 cents)
+        if spread > 0.20:
+            print(f"  ❌ Spread too wide: ${spread:.2f} (>20¢) - skipping trade")
             return False
         
         spread_35_percent = spread * 0.35
