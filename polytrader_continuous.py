@@ -110,11 +110,27 @@ def get_hour_start_price(currency, current_crypto_price):
     """Get exact price from Binance at the precise start of the current hour with maximum precision."""
     hour_key = datetime.now(UTC).strftime('%Y-%m-%d_%H')
     
-    # Clear cache if we're in a new hour
+    # Clear cache if we're in a new hour, but preserve recent data for volatility calculations
     current_hour = datetime.now(UTC).strftime('%Y-%m-%d_%H')
     if hasattr(state, 'last_hour_key') and state.last_hour_key != current_hour:
-        state.hour_start_cache.clear()  # Clear cache for new hour
-        print(f"🔄 New hour detected, clearing p_start cache")
+        # Instead of clearing everything, only keep the last 2 hours for volatility calculations
+        current_time = datetime.now(UTC)
+        cutoff_time = current_time - timedelta(hours=2)
+        
+        # Clean old entries but keep recent ones
+        keys_to_remove = []
+        for key in state.hour_start_cache.keys():
+            try:
+                key_time = datetime.strptime(key, '%Y-%m-%d_%H').replace(tzinfo=UTC)
+                if key_time < cutoff_time:
+                    keys_to_remove.append(key)
+            except:
+                keys_to_remove.append(key)  # Remove malformed keys
+        
+        for key in keys_to_remove:
+            del state.hour_start_cache[key]
+            
+        print(f"🔄 New hour detected, cleaned old p_start cache entries (kept recent 2 hours)")
     state.last_hour_key = current_hour
     
     # Check if we already have p_start cached for this hour
@@ -508,53 +524,46 @@ def calculate_model_prediction(currency, current_price, ofi, market_price):
         current_minute = datetime.now(UTC).minute
         tau = max(1 - (current_minute / 60), 0.01)
         
-        # Get volatility from last 20 minutes of live price cache
-        if currency in state.data_cache and len(state.data_cache[currency]) >= 5:
-            # Filter cache to last 20 minutes
+        # Enhanced volatility calculation with better fallbacks
+        vol = 0.02  # Default fallback
+        vol_source = "default"
+        
+        if currency in state.data_cache and len(state.data_cache[currency]) >= 3:
+            # Filter cache to last 20 minutes for volatility calculation
             current_time = datetime.now(UTC)
             twenty_minutes_ago = current_time - timedelta(minutes=20)
             
-            # Extract data points from last 20 minutes: (timestamp, market_name, token_id, best_bid, best_ask, spot_price, ofi, prediction)
+            # Extract data points from last 20 minutes
             recent_data = []
             for data_point in state.data_cache[currency]:
-                # Parse timestamp from data point
                 try:
                     data_timestamp = datetime.strptime(data_point[0], '%Y-%m-%d %H:%M:%S').replace(tzinfo=UTC)
                     if data_timestamp >= twenty_minutes_ago:
-                        recent_data.append(data_point)
+                        recent_data.append((data_timestamp, data_point[5]))  # (timestamp, spot_price)
                 except:
-                    # If timestamp parsing fails, include the point (better safe than sorry)
-                    recent_data.append(data_point)
+                    continue
             
-            if len(recent_data) >= 5:
-                # Sample data to ~1-minute intervals to get proper volatility calculation
-                # Group by minute and take the last price in each minute
-                minute_prices = {}
-                for data_point in recent_data:
-                    try:
-                        data_timestamp = datetime.strptime(data_point[0], '%Y-%m-%d %H:%M:%S').replace(tzinfo=UTC)
-                        minute_key = data_timestamp.strftime('%Y-%m-%d %H:%M')  # Group by minute
-                        minute_prices[minute_key] = data_point[5]  # Keep latest price for each minute
-                    except:
-                        continue
+            if len(recent_data) >= 3:
+                # Sort by timestamp and extract prices
+                recent_data.sort(key=lambda x: x[0])
+                prices = [x[1] for x in recent_data]
                 
-                if len(minute_prices) >= 3:
-                    # Use minute-level prices for volatility calculation
-                    prices_by_minute = [minute_prices[key] for key in sorted(minute_prices.keys())]
-                    price_series = pd.Series(prices_by_minute)
-                    log_returns = np.log(price_series).diff()
-                    rolling_vol = log_returns.std()
-                    vol = rolling_vol * np.sqrt(60) if not pd.isna(rolling_vol) and rolling_vol > 0 else 0.01
-                else:
-                    vol = 0.01
-            else:
-                vol = 0.01
-        else:
-            # Fallback: use a reasonable default volatility
-            vol = 0.02  # 2% hourly vol as default
-            
-        if pd.isna(vol) or vol <= 0:
-            vol = 0.01
+                # Calculate volatility using all available data points (not just minute-level)
+                if len(prices) >= 3:
+                    price_series = pd.Series(prices)
+                    log_returns = np.log(price_series).diff().dropna()
+                    
+                    if len(log_returns) >= 2:
+                        rolling_vol = log_returns.std()
+                        if not pd.isna(rolling_vol) and rolling_vol > 0:
+                            # Scale to hourly volatility (approximate)
+                            vol = rolling_vol * np.sqrt(60 / len(log_returns))  # Scale based on data frequency
+                            vol_source = f"calculated_from_{len(prices)}_points"
+                        
+        # Ensure vol is reasonable
+        if pd.isna(vol) or vol <= 0 or vol > 1.0:  # Cap at 100% hourly vol
+            vol = 0.02
+            vol_source = "capped_fallback"
         
         # Model features
         r_scaled = r / np.sqrt(tau)
@@ -566,18 +575,26 @@ def calculate_model_prediction(currency, current_price, ofi, market_price):
         # Ensure prediction is properly bounded between 0 and 1
         prediction = max(0.0, min(1.0, raw_prediction))
         
-        # Debug: Log raw vs bounded prediction
+        # Enhanced debugging - show more details at hour start (first 5 minutes)
+        if current_minute <= 5 or currency == 'btc':  # Always debug BTC, and all currencies in first 5 minutes
+            print(f"    🔍 {currency.upper()} Features: r={r:.6f} r_scaled={r_scaled:.6f} τ={tau:.3f} vol={vol:.4f}({vol_source}) ofi={ofi:.4f}")
+            print(f"    🔍 {currency.upper()} p_start=${p_start:.8f} current=${current_price:.8f} minute={current_minute}")
+            print(f"    🔍 {currency.upper()} Prediction: raw={raw_prediction:.4f} bounded={prediction:.4f} market={market_price:.4f}")
+            
+            # Show cache info for debugging
+            cache_size = len(state.data_cache[currency]) if currency in state.data_cache else 0
+            print(f"    🔍 {currency.upper()} Cache: {cache_size} total points")
+        
+        # Warn if prediction was bounded
         if abs(raw_prediction - prediction) > 0.01:
             print(f"    ⚠️ {currency.upper()} prediction bounded: {raw_prediction:.4f} → {prediction:.4f}")
-        
-        # Debug: Show raw prediction for Bitcoin to check if it's reasonable
-        if currency == 'btc':
-            print(f"    🔍 BTC Debug: raw={raw_prediction:.4f} bounded={prediction:.4f} market={market_price:.4f}")
         
         return prediction
         
     except Exception as e:
         print(f"❌ Prediction error for {currency}: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 def place_order(side, token_id, price, size_shares):
@@ -806,16 +823,63 @@ def ensure_outcome_column_exists(currency):
     except Exception as e:
         print(f"  ❌ Error ensuring outcome column for {currency}: {e}")
 
+def get_p_start_price_for_hour(currency, hour_utc):
+    """Get p_start price for a specific hour from Binance API."""
+    try:
+        config = CURRENCY_CONFIG[currency]
+        hour_start_ms = int(hour_utc.timestamp() * 1000)
+        
+        wait_for_rate_limit()
+        response = requests.get("https://api.binance.com/api/v3/klines", 
+                              params={
+                                  "symbol": config['asset_symbol'], 
+                                  "interval": "1m",
+                                  "startTime": hour_start_ms,
+                                  "limit": 1
+                              }, 
+                              timeout=5)
+        response.raise_for_status()
+        
+        klines = response.json()
+        if klines:
+            return float(klines[0][1])  # open price
+        return None
+        
+    except Exception as e:
+        print(f"  ⚠️ Failed to get p_start for {currency} at {hour_utc}: {e}")
+        return None
+
 def update_outcome_for_previous_hour(currency, current_hour_utc):
     """Update outcome for the previous hour based on price comparison."""
     try:
         previous_hour_utc = current_hour_utc - timedelta(hours=1)
         
-        # Get p_start for both hours
-        p_start_previous = state.hour_start_cache.get(previous_hour_utc.strftime('%Y-%m-%d_%H'))
-        p_start_current = state.hour_start_cache.get(current_hour_utc.strftime('%Y-%m-%d_%H'))
+        print(f"  🔍 Checking outcome for {currency.upper()} previous hour: {previous_hour_utc.strftime('%Y-%m-%d %H:%M')}")
+        
+        # Try to get p_start from cache first, then fetch from API if needed
+        previous_hour_key = previous_hour_utc.strftime('%Y-%m-%d_%H')
+        current_hour_key = current_hour_utc.strftime('%Y-%m-%d_%H')
+        
+        # Get previous hour price
+        p_start_previous = None
+        if previous_hour_key in state.hour_start_cache and currency in state.hour_start_cache[previous_hour_key]:
+            p_start_previous = state.hour_start_cache[previous_hour_key][currency]
+            print(f"  📋 Found previous hour p_start in cache: ${p_start_previous:.8f}")
+        else:
+            print(f"  🔍 Previous hour p_start not in cache, fetching from Binance...")
+            p_start_previous = get_p_start_price_for_hour(currency, previous_hour_utc)
+            
+        # Get current hour price
+        p_start_current = None
+        if current_hour_key in state.hour_start_cache and currency in state.hour_start_cache[current_hour_key]:
+            p_start_current = state.hour_start_cache[current_hour_key][currency]
+            print(f"  📋 Found current hour p_start in cache: ${p_start_current:.8f}")
+        else:
+            print(f"  🔍 Current hour p_start not in cache, fetching from Binance...")
+            p_start_current = get_p_start_price_for_hour(currency, current_hour_utc)
         
         if p_start_previous is None or p_start_current is None:
+            print(f"  ⚠️ Cannot determine outcome: previous=${p_start_previous}, current=${p_start_current}")
             return  # Can't determine outcome without both prices
             
         # Determine outcome
@@ -825,6 +889,8 @@ def update_outcome_for_previous_hour(currency, current_hour_utc):
             outcome = "DOWN"
         else:
             outcome = "FLAT"
+            
+        print(f"  📊 Outcome determined: {outcome} (${p_start_previous:.8f} → ${p_start_current:.8f})")
             
         # Update database for previous hour
         hour_start_str = previous_hour_utc.strftime('%Y-%m-%d %H:%M:%S')
@@ -839,7 +905,9 @@ def update_outcome_for_previous_hour(currency, current_hour_utc):
             """, (outcome, hour_start_str, hour_end_str))
             
             if cursor.rowcount > 0:
-                print(f"  📈 Updated {cursor.rowcount} rows for {currency} previous hour: {outcome} (${p_start_previous:.2f} → ${p_start_current:.2f})")
+                print(f"  ✅ Updated {cursor.rowcount} rows for {currency} previous hour: {outcome} (${p_start_previous:.2f} → ${p_start_current:.2f})")
+            else:
+                print(f"  ⚠️ No rows found to update for {currency} in time range {hour_start_str} to {hour_end_str}")
                 
     except Exception as e:
         print(f"  ❌ Error updating outcome for {currency}: {e}")
