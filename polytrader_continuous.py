@@ -55,7 +55,6 @@ CURRENCY_CONFIG = {
 }
 
 # Trading parameters
-BANKROLL = 0.30
 BANKROLL_FRACTION = 0.8
 PROBABILITY_DELTA_THRESHOLD = 3.0
 MINIMUM_ORDER_SIZE_SHARES = 5.0
@@ -64,7 +63,7 @@ CYCLE_DELAY_SECONDS = 2.0
 API_CALLS_PER_MINUTE = 80
 
 # Mock trading parameters
-MOCK_TRADING_ENABLED = True
+MOCK_TRADING_ENABLED = False
 MOCK_INITIAL_BANKROLL = 100.0
 MOCK_KELLY_FRACTION = 0.5
 MOCK_THETA = 0.03  # 3% minimum delta threshold
@@ -86,6 +85,8 @@ class TradingState:
         self.api_call_times = deque(maxlen=1000)
         self.running = True
         self.hour_start_cache = {}  # Cache p_start prices
+        self.current_bankroll = None  # Will be fetched from Polymarket
+        self.last_bankroll_check = 0  # Track when we last checked bankroll
         
         # Mock trading state
         if MOCK_TRADING_ENABLED:
@@ -578,10 +579,58 @@ def calculate_model_prediction(currency, current_price, ofi, market_price):
         print(f"\033[31m❌ Prediction error for {currency}: {e}\033[0m")
         return None
 
+def place_order(side, token_id, price, size_shares):
+    """Place a BUY or SELL order on Polymarket."""
+    if not state.polymarket_client:
+        print(f"  \033[31m❌ Cannot place order: Polymarket client not available\033[0m")
+        return False
+    
+    try:
+        wait_for_rate_limit()
+        
+        # Create order with 2-minute expiration
+        expiration = int((datetime.now(UTC) + timedelta(minutes=2)).timestamp())
+        
+        order_args = OrderArgs(
+            price=round(price, 4),
+            size=size_shares,
+            side=side,
+            token_id=token_id,
+            expiration=expiration
+        )
+        
+        signed_order = state.polymarket_client.create_order(order_args)
+        response = state.polymarket_client.post_order(signed_order, OrderType.GTD)
+        
+        if response.get('success', False):
+            print(f"  \033[32m✅ {side} order placed: {size_shares:.2f} shares @ ${price:.4f}\033[0m")
+            return True
+        else:
+            print(f"  \033[31m❌ Order failed: {response.get('errorMsg', 'Unknown error')}\033[0m")
+            return False
+            
+    except Exception as e:
+        print(f"  \033[31m❌ Order error: {e}\033[0m")
+        return False
+
 def execute_dynamic_position_management(currency, prediction, market_price, token_yes, token_no, best_bid, best_ask):
     """Execute position adjustment based on model prediction with position tracking."""
     if not prediction or not TRADING_ENABLED:
         return {"executed": False, "reason": "no_prediction_or_disabled"}
+    
+    # Get current bankroll (check every 10 minutes)
+    current_time = time.time()
+    if current_time - state.last_bankroll_check > 600:  # 10 minutes
+        state.current_bankroll = get_current_bankroll()
+        state.last_bankroll_check = current_time
+        
+        if state.current_bankroll is not None:
+            print(f"  \033[32m💰 Current bankroll: ${state.current_bankroll:.2f}\033[0m")
+        else:
+            print(f"  \033[33m⚠️ Could not fetch bankroll, using last known value\033[0m")
+    
+    if state.current_bankroll is None:
+        return {"executed": False, "reason": "no_bankroll_data"}
     
     # Calculate delta and check threshold
     delta = (prediction - market_price) * 100
@@ -593,8 +642,8 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
     current_yes, current_no = get_current_position(token_yes, token_no)
     current_net = current_yes - current_no  # Net position (positive = bullish)
     
-    # Calculate target position
-    target_exposure = BANKROLL_FRACTION * BANKROLL * abs(delta) / 100
+    # Calculate target position using real bankroll
+    target_exposure = BANKROLL_FRACTION * state.current_bankroll * abs(delta) / 100
     
     if delta > 0:
         # Bullish: want long YES position
@@ -637,7 +686,7 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
             "adjustment": f"{position_adjustment:+.2f}"
         }
     
-    if min_cost > BANKROLL * 0.9:
+    if min_cost > state.current_bankroll * 0.9:
         return {
             "executed": False,
             "reason": "insufficient_funds",
@@ -648,13 +697,32 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
             "target_no": target_no,
             "adjustment": f"{position_adjustment:+.2f}",
             "needed": min_cost,
-            "available": BANKROLL
+            "available": state.current_bankroll
         }
     
-    # For now, return simulated trade (would execute real trade here)
+        # Execute real trades
+    if position_adjustment > 0:
+        # Need to buy more
+        if delta > 0:
+            # Buy YES tokens
+            success = place_order("BUY", token_yes, best_ask, abs(position_adjustment))
+        else:
+            # Buy NO tokens  
+            success = place_order("BUY", token_no, 1 - best_bid, abs(position_adjustment))
+    elif position_adjustment < 0:
+        # Need to sell
+        if current_yes > 0:
+            # Sell YES tokens
+            success = place_order("SELL", token_yes, best_bid, abs(position_adjustment))
+        elif current_no > 0:
+            # Sell NO tokens
+            success = place_order("SELL", token_no, 1 - best_ask, abs(position_adjustment))
+        else:
+            success = False
+    
     return {
-        "executed": True,
-        "reason": "simulated_trade",
+        "executed": success,
+        "reason": "real_trade" if success else "trade_failed",
         "delta": delta,
         "direction": "UP" if delta > 0 else "DOWN", 
         "target_exposure": target_exposure,
@@ -868,6 +936,30 @@ def initialize_system():
         except Exception as e:
             print(f"\033[31m❌ Error loading {currency.upper()} model: {e}\033[0m")
     
+    # Initialize Polymarket client and get initial bankroll
+    if TRADING_ENABLED and POLYMARKET_AVAILABLE:
+        try:
+            if POLYMARKET_PRIVATE_KEY and POLYMARKET_PROXY_ADDRESS:
+                state.polymarket_client = ClobClient(
+                    host=CLOB_API_URL,
+                    key=POLYMARKET_PRIVATE_KEY,
+                    chain_id=137,  # Polygon
+                    proxy_address=POLYMARKET_PROXY_ADDRESS
+                )
+                print(f"\033[32m✅ Polymarket client initialized\033[0m")
+                
+                # Get initial bankroll
+                state.current_bankroll = get_current_bankroll()
+                if state.current_bankroll is not None:
+                    print(f"\033[32m💰 Initial bankroll: ${state.current_bankroll:.2f}\033[0m")
+                    state.last_bankroll_check = time.time()
+                else:
+                    print(f"\033[33m⚠️ Could not fetch initial bankroll\033[0m")
+            else:
+                print(f"\033[33m⚠️ Polymarket credentials not configured\033[0m")
+        except Exception as e:
+            print(f"\033[31m❌ Error initializing Polymarket client: {e}\033[0m")
+    
     # Initialize mock trading
     if MOCK_TRADING_ENABLED:
         print("\033[33m💰 Initializing mock trading system...\033[0m")
@@ -969,6 +1061,40 @@ def cancel_all_open_orders():
     except Exception:
         # Silently handle API errors - don't let order cancellation stop trading
         return 0
+
+def get_current_bankroll():
+    """Get current USDC balance from Polymarket."""
+    if not state.polymarket_client:
+        print(f"  \033[31m❌ Cannot get bankroll: Polymarket client not available\033[0m")
+        return None
+    
+    try:
+        wait_for_rate_limit()
+        
+        # Get USDC balance
+        balance_params = BalanceAllowanceParams(
+            asset_type=AssetType.USDC,
+            token_ids=["USDC"]  # USDC token ID
+        )
+        
+        response = state.polymarket_client.get_balances(balance_params)
+        
+        if not response or 'balances' not in response:
+            print(f"  \033[31m❌ No balance data received from Polymarket\033[0m")
+            return None
+        
+        # Find USDC balance
+        usdc_balance = 0
+        for balance in response['balances']:
+            if balance.get('token_id') == 'USDC':
+                usdc_balance = float(balance.get('balance', 0))
+                break
+        
+        return usdc_balance
+        
+    except Exception as e:
+        print(f"  \033[31m❌ Error getting bankroll: {e}\033[0m")
+        return None
 
 def get_current_position(token_id_yes, token_id_no):
     """Get current position in YES and NO tokens for a market."""
