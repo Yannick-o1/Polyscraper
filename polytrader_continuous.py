@@ -222,13 +222,14 @@ def parse_market_datetime(market_slug, market_question, currency):
         except (ValueError, IndexError):
             pass  # Fallback to question parsing
 
-    # Fallback: Parse date from question text, e.g., "June 10, 5 PM ET"
-    q_match = re.search(r'(\w+)\s+(\d+),?\s+(\d+)\s+(am|pm)\s+et', market_question, re.IGNORECASE)
+    # Fallback: Parse date from question text, e.g., "August 4, 3AM ET"
+    # Updated pattern to handle the actual format from the logs
+    q_match = re.search(r'(\w+)\s+(\d+),?\s+(\d+)(am|pm)\s+et', market_question, re.IGNORECASE)
     if q_match:
-        month_name, day, hour, ampm = q_match.groups()
+        month_name, day, hour_ampm, ampm = q_match.groups()
         try:
             month = list(map(lambda x: x.lower(), ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'])).index(month_name.lower()) + 1
-            hour = int(hour)
+            hour = int(hour_ampm)
             if ampm.lower() == 'pm' and hour != 12:
                 hour += 12
             elif ampm.lower() == 'am' and hour == 12:
@@ -285,9 +286,22 @@ def update_markets_csv(currency):
         print(f"  Token NO ID: {token_id_no}")
         print(f"  Parsed Date: {parsed_date}")
         
+        # Debug: Show what's missing
+        missing_data = []
+        if not slug:
+            missing_data.append("slug")
+        if not question:
+            missing_data.append("question")
+        if not token_id_yes:
+            missing_data.append("token_id_yes")
+        if not token_id_no:
+            missing_data.append("token_id_no")
+        if parsed_date == "Could not parse date":
+            missing_data.append("parsed_date")
+        
         # Reject markets with missing essential data
         if not all([slug, question, token_id_yes, token_id_no, parsed_date != "Could not parse date"]):
-            print(f"  -> REJECTED: Missing essential data")
+            print(f"  -> REJECTED: Missing essential data ({', '.join(missing_data)})")
             print()
             continue
         
@@ -342,23 +356,48 @@ def get_market_data(currency):
     try:
         markets_file = f"{currency}_polymarkets.csv"
         
+        # Check if we need to update markets
+        should_update = False
+        
         if not os.path.exists(markets_file):
             print(f"\033[33m⚠️ No market file found for {currency}. Updating markets...\033[0m")
-            update_markets_csv(currency)
-            # Retry after updating
-            if not os.path.exists(markets_file):
-                return None, None, None
-            
-        df = pd.read_csv(markets_file)
-        if df.empty:
-            print(f"\033[33m⚠️ Empty market file for {currency}. Updating markets...\033[0m")
-            update_markets_csv(currency)
-            # Retry after updating
+            should_update = True
+        else:
             df = pd.read_csv(markets_file)
             if df.empty:
+                print(f"\033[33m⚠️ Empty market file for {currency}. Updating markets...\033[0m")
+                should_update = True
+            else:
+                # Get current hour and convert to ET timezone for market matching
+                current_hour_utc = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+                et_tz = ZoneInfo("America/New_York")
+                target_hour_dt_et = current_hour_utc.astimezone(et_tz)
+                target_datetime_str = target_hour_dt_et.strftime('%Y-%m-%d %H:%M EDT')
+                
+                # Find market matching current hour
+                matching_rows = df[df['date_time'] == target_datetime_str]
+                
+                if matching_rows.empty:
+                    print(f"\033[33m⚠️ No market found for current hour: {target_datetime_str}\033[0m")
+                    should_update = True
+        
+        # Update markets if needed
+        if should_update:
+            print(f"\033[36m🔄 Updating markets for {currency}...\033[0m")
+            update_markets_csv(currency)
+            
+            # Check if update was successful
+            if not os.path.exists(markets_file):
+                print(f"\033[31m❌ Failed to create market file for {currency}\033[0m")
+                return None, None, None
+            
+            df = pd.read_csv(markets_file)
+            if df.empty:
+                print(f"\033[31m❌ No markets found for {currency} after update\033[0m")
                 return None, None, None
         
-        # Get current hour and convert to ET timezone for market matching
+        # Now try to find the current market
+        df = pd.read_csv(markets_file)
         current_hour_utc = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
         et_tz = ZoneInfo("America/New_York")
         target_hour_dt_et = current_hour_utc.astimezone(et_tz)
@@ -368,25 +407,14 @@ def get_market_data(currency):
         matching_rows = df[df['date_time'] == target_datetime_str]
         
         if matching_rows.empty:
-            print(f"\033[33m⚠️ No market found for current hour: {target_datetime_str}\033[0m")
-            print(f"\033[36m🔄 Updating markets for {currency}...\033[0m")
-            update_markets_csv(currency)
-            
-            # Retry after updating
-            df = pd.read_csv(markets_file)
-            matching_rows = df[df['date_time'] == target_datetime_str]
-            
-            if matching_rows.empty:
-                print(f"\033[33m⚠️ Still no market found after update. Using fallback...\033[0m")
-                # Fall back to most recent market as backup
-                latest_market = df.iloc[-1]
-                print(f"   Using fallback market: {latest_market['market_name']}")
-            else:
-                latest_market = matching_rows.iloc[0]
-                print(f"\033[32m✅ Found market after update: {latest_market['market_name']}\033[0m")
+            print(f"\033[33m⚠️ Still no market found for current hour: {target_datetime_str}\033[0m")
+            print(f"\033[33m⚠️ Using fallback market...\033[0m")
+            # Fall back to most recent market as backup
+            latest_market = df.iloc[-1]
+            print(f"   Using fallback market: {latest_market['market_name']}")
         else:
             latest_market = matching_rows.iloc[0]
-            # Market found - no need to log this every time
+            print(f"\033[32m✅ Found market: {latest_market['market_name']}\033[0m")
         
         token_id_yes = str(int(latest_market['token_id_yes']))
         token_id_no = str(int(latest_market['token_id_no']))
