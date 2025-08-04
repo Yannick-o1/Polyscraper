@@ -406,7 +406,6 @@ def get_market_data(currency):
             print(f"   Using fallback market: {latest_market['market_name']}")
         else:
             latest_market = matching_rows.iloc[0]
-            print(f"✅ Found market: {latest_market['market_name']}")
         
         token_id_yes = str(int(latest_market['token_id_yes']))
         token_id_no = str(int(latest_market['token_id_no']))
@@ -563,6 +562,10 @@ def calculate_model_prediction(currency, current_price, ofi, market_price):
         # Debug: Log raw vs bounded prediction
         if abs(raw_prediction - prediction) > 0.01:
             print(f"    ⚠️ {currency.upper()} prediction bounded: {raw_prediction:.4f} → {prediction:.4f}")
+        
+        # Debug: Show raw prediction for Bitcoin to check if it's reasonable
+        if currency == 'btc':
+            print(f"    🔍 BTC Debug: raw={raw_prediction:.4f} bounded={prediction:.4f} market={market_price:.4f}")
         
         return prediction
         
@@ -873,19 +876,26 @@ def trade_currency_cycle(currency):
         else:
             print(f"  📈 {currency.upper()}: P=N/A M={market_price*100:.1f}%")
         
-        # Show market prices and bankroll
-        print(f"    💰 Bid: ${original_bid:.4f} | Ask: ${original_ask:.4f} | Market: ${market_price:.4f}")
+        # Show features and p_start
+        p_start = get_hour_start_price(currency, spot_price)
+        r = (spot_price / p_start - 1) if p_start > 0 else 0
+        current_minute = datetime.now(UTC).minute
+        tau = max(1 - (current_minute / 60), 0.01)
+        print(f"    📊 Features: r={r:.4f} τ={tau:.3f} p_start=${p_start:.2f}")
+        
+        # Show bid/ask and bankroll
+        print(f"    💰 Bid: ${original_bid:.4f} | Ask: ${original_ask:.4f}")
         if state.current_bankroll is not None:
             print(f"    🏦 Bankroll: ${state.current_bankroll:.2f}")
         
         # Show current positions
         current_yes, current_no = get_current_position(token_yes, token_no)
         if current_yes > 0 or current_no > 0:
-            print(f"    📊 Positions: YES {current_yes:.2f} | NO {current_no:.2f}")
+            print(f"    📊 Current: YES {current_yes:.2f} | NO {current_no:.2f}")
         else:
-            print(f"    📊 Positions: None")
+            print(f"    📊 Current: None")
         
-        # Display trade result
+        # Display trade result with target positions
         if trade_result["executed"]:
             print(f"    🟢 TRADED: {trade_result['direction']} exposure ${trade_result['target_exposure']:.2f}")
             print(f"    ▶️ Target: YES {trade_result['target_yes']:.2f} | NO {trade_result['target_no']:.2f}")
@@ -897,10 +907,13 @@ def trade_currency_cycle(currency):
             print(f"    🟡 NO TRADE: Adjustment {trade_result['adjustment']} below minimum")
         elif trade_result["reason"] == "position_aligned":
             print(f"    🟢 NO TRADE: Position already optimal")
+            print(f"    ▶️ Target: YES {trade_result['target_yes']:.2f} | NO {trade_result['target_no']:.2f}")
         elif trade_result["reason"] == "no_bankroll_data":
             print(f"    🔴 NO TRADE: Cannot fetch bankroll")
         else:
             print(f"    ⚪ NO TRADE: {trade_result['reason']}")
+            if 'target_yes' in trade_result and 'target_no' in trade_result:
+                print(f"    ▶️ Target: YES {trade_result['target_yes']:.2f} | NO {trade_result['target_no']:.2f}")
         
         # Save data (already done above with decimal values)
         
@@ -1047,6 +1060,8 @@ def cancel_all_open_orders():
         
         if cancelled_count > 0:
             print(f"  🗑️ Cancelled {cancelled_count} open orders")
+        else:
+            print(f"  🗑️ No open orders to cancel")
         
         return cancelled_count
         
