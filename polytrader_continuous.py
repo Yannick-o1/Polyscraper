@@ -61,8 +61,6 @@ MINIMUM_ORDER_SIZE_SHARES = 5.0
 CYCLE_DELAY_SECONDS = 2.0
 API_CALLS_PER_MINUTE = 80
 
-
-
 # Environment
 TRADING_ENABLED = True
 POLYMARKET_PRIVATE_KEY = os.getenv("POLYMARKET_PRIVATE_KEY")
@@ -76,12 +74,12 @@ class TradingState:
         self.models = {}
         self.polymarket_client = None
         self.data_cache = defaultdict(lambda: deque(maxlen=100))
-# self.last_db_write = defaultdict(float)  # Removed - writing every cycle now
         self.api_call_times = deque(maxlen=1000)
         self.running = True
         self.hour_start_cache = {}  # Cache p_start prices
         self.current_bankroll = None  # Will be fetched from Polymarket
         self.last_bankroll_check = 0  # Track when we last checked bankroll
+        self.last_outcome_update = {}  # Track last outcome update per currency to prevent duplicates
         
 
 
@@ -556,8 +554,9 @@ def calculate_model_prediction(currency, current_price, ofi, market_price):
                     if len(log_returns) >= 2:
                         rolling_vol = log_returns.std()
                         if not pd.isna(rolling_vol) and rolling_vol > 0:
-                            # Scale to hourly volatility (approximate)
-                            vol = rolling_vol * np.sqrt(60 / len(log_returns))  # Scale based on data frequency
+                            # Proper volatility calculation - no arbitrary scaling
+                            # This is the standard deviation of log returns, which is already the correct volatility measure
+                            vol = rolling_vol
                             vol_source = f"calculated_from_{len(prices)}_points"
                         
         # Ensure vol is reasonable
@@ -800,6 +799,39 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
         "adjustment": f"{position_adjustment:+.2f}"
     }
 
+def get_db_connection(currency):
+    """Get database connection for a currency."""
+    return sqlite3.connect(f"{currency}_polyscraper.db")
+
+def log_error(operation, currency, error):
+    """Consistent error logging format."""
+    print(f"  ❌ Error {operation} for {currency}: {error}")
+
+def display_trade_result(trade_result):
+    """Display trade execution result with appropriate formatting."""
+    if trade_result.get("executed", False):
+        print(f"    🟢 TRADED: {trade_result['direction']} exposure ${trade_result['target_exposure']:.2f}")
+        print(f"    ▶️ Target: YES {trade_result['target_yes']:.2f} | NO {trade_result['target_no']:.2f}")
+    elif trade_result["reason"] == "delta_too_small":
+        print(f"    ⚪ NO TRADE: Delta {trade_result['delta']:.1f}pp below threshold ({PROBABILITY_DELTA_THRESHOLD}pp)")
+        if 'target_yes' in trade_result and 'target_no' in trade_result:
+            print(f"    🗑️ Clearing positions: Target YES {trade_result['target_yes']:.2f} | NO {trade_result['target_no']:.2f}")
+    elif trade_result["reason"] == "insufficient_funds":
+        print(f"    🔴 NO TRADE: Need ${trade_result['needed']:.2f}, have ${trade_result['available']:.2f}")
+    elif trade_result["reason"] == "adjustment_too_small":
+        print(f"    🟡 NO TRADE: Adjustment {trade_result['adjustment']} below minimum")
+    elif trade_result["reason"] == "position_aligned":
+        print(f"    🟢 NO TRADE: Position already optimal")
+        print(f"    ▶️ Target: YES {trade_result['target_yes']:.2f} | NO {trade_result['target_no']:.2f}")
+    elif trade_result["reason"] == "no_bankroll_data":
+        print(f"    🔴 NO TRADE: Cannot fetch bankroll")
+    elif trade_result["reason"] == "delta_too_extreme":
+        print(f"    ⚪ NO TRADE: Delta {trade_result['delta']:.1f}pp is too extreme (>20pp)")
+    else:
+        print(f"    ⚪ NO TRADE: {trade_result['reason']}")
+        if 'target_yes' in trade_result and 'target_no' in trade_result:
+            print(f"    ▶️ Target: YES {trade_result['target_yes']:.2f} | NO {trade_result['target_no']:.2f}")
+
 def save_data_point(currency, timestamp, market_name, token_id_yes, best_bid, best_ask, spot_price, ofi, prediction):
     """Save data point to cache."""
     data_point = (timestamp, market_name, token_id_yes, best_bid, best_ask, spot_price, ofi, prediction)
@@ -808,11 +840,8 @@ def save_data_point(currency, timestamp, market_name, token_id_yes, best_bid, be
 def ensure_outcome_column_exists(currency):
     """Ensure the outcome column exists in the database table."""
     try:
-        config = CURRENCY_CONFIG[currency]
-        with sqlite3.connect(f"{currency}_polyscraper.db") as conn:
+        with get_db_connection(currency) as conn:
             cursor = conn.cursor()
-            
-            # Check if outcome column exists
             cursor.execute("PRAGMA table_info(polydata)")
             columns = [column[1] for column in cursor.fetchall()]
             
@@ -821,7 +850,7 @@ def ensure_outcome_column_exists(currency):
                 print(f"  📊 Added outcome column to {currency} database")
                 
     except Exception as e:
-        print(f"  ❌ Error ensuring outcome column for {currency}: {e}")
+        log_error("ensuring outcome column", currency, e)
 
 def get_p_start_price_for_hour(currency, hour_utc):
     """Get p_start price for a specific hour from Binance API."""
@@ -854,6 +883,11 @@ def update_outcome_for_previous_hour(currency, current_hour_utc):
     try:
         previous_hour_utc = current_hour_utc - timedelta(hours=1)
         
+        # Check if we've already updated outcome for this hour transition
+        transition_key = f"{currency}_{previous_hour_utc.strftime('%Y-%m-%d_%H')}"
+        if transition_key in state.last_outcome_update:
+            return  # Already updated for this transition
+            
         print(f"  🔍 Checking outcome for {currency.upper()} previous hour: {previous_hour_utc.strftime('%Y-%m-%d %H:%M')}")
         
         # Try to get p_start from cache first, then fetch from API if needed
@@ -896,7 +930,7 @@ def update_outcome_for_previous_hour(currency, current_hour_utc):
         hour_start_str = previous_hour_utc.strftime('%Y-%m-%d %H:%M:%S')
         hour_end_str = current_hour_utc.strftime('%Y-%m-%d %H:%M:%S')
         
-        with sqlite3.connect(f"{currency}_polyscraper.db") as conn:
+        with get_db_connection(currency) as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE polydata 
@@ -906,11 +940,13 @@ def update_outcome_for_previous_hour(currency, current_hour_utc):
             
             if cursor.rowcount > 0:
                 print(f"  ✅ Updated {cursor.rowcount} rows for {currency} previous hour: {outcome} (${p_start_previous:.2f} → ${p_start_current:.2f})")
+                # Mark this transition as completed
+                state.last_outcome_update[transition_key] = datetime.now(UTC)
             else:
                 print(f"  ⚠️ No rows found to update for {currency} in time range {hour_start_str} to {hour_end_str}")
                 
     except Exception as e:
-        print(f"  ❌ Error updating outcome for {currency}: {e}")
+        log_error("updating outcome", currency, e)
 
 def write_to_database(currency):
     """Write latest data point to database every cycle."""
@@ -923,66 +959,14 @@ def write_to_database(currency):
             # Ensure outcome column exists
             ensure_outcome_column_exists(currency)
             
-            with sqlite3.connect(f"{currency}_polyscraper.db") as conn:
+            with get_db_connection(currency) as conn:
                 cursor = conn.cursor()
                 cursor.execute(f'''
                     INSERT INTO polydata (timestamp, market_name, token_id, best_bid, best_ask, {config['db_column']}, ofi, p_up_prediction)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ''', latest_data)
             
-            # Calculate and display model features using CRYPTO prices
-            p_start = get_hour_start_price(currency, spot_price)
-            r = (spot_price / p_start - 1) if p_start > 0 else 0
-            current_minute = datetime.now(UTC).minute
-            tau = max(1 - (current_minute / 60), 0.01)
-            
-            # Get volatility from last 20 minutes (consistent with prediction calculation)
-            if currency in state.data_cache and len(state.data_cache[currency]) >= 5:
-                # Filter cache to last 20 minutes
-                current_time = datetime.now(UTC)
-                twenty_minutes_ago = current_time - timedelta(minutes=20)
-                
-                # Extract data points from last 20 minutes: (timestamp, market_name, token_id, best_bid, best_ask, spot_price, ofi, prediction)
-                recent_data = []
-                for data_point in state.data_cache[currency]:
-                    # Parse timestamp from data point
-                    try:
-                        data_timestamp = datetime.strptime(data_point[0], '%Y-%m-%d %H:%M:%S').replace(tzinfo=UTC)
-                        if data_timestamp >= twenty_minutes_ago:
-                            recent_data.append(data_point)
-                    except:
-                        # If timestamp parsing fails, include the point (better safe than sorry)
-                        recent_data.append(data_point)
-                
-                if len(recent_data) >= 5:
-                    # Sample data to ~1-minute intervals to get proper volatility calculation
-                    # Group by minute and take the last price in each minute
-                    minute_prices = {}
-                    for data_point in recent_data:
-                        try:
-                            data_timestamp = datetime.strptime(data_point[0], '%Y-%m-%d %H:%M:%S').replace(tzinfo=UTC)
-                            minute_key = data_timestamp.strftime('%Y-%m-%d %H:%M')  # Group by minute
-                            minute_prices[minute_key] = data_point[5]  # Keep latest price for each minute
-                        except:
-                            continue
-                    
-                    if len(minute_prices) >= 3:
-                        # Use minute-level prices for volatility calculation
-                        prices_by_minute = [minute_prices[key] for key in sorted(minute_prices.keys())]
-                        price_series = pd.Series(prices_by_minute)
-                        log_returns = np.log(price_series).diff()
-                        rolling_vol = log_returns.std()
-                        vol = rolling_vol * np.sqrt(60) if not pd.isna(rolling_vol) and rolling_vol > 0 else 0.01
-                    else:
-                        vol = 0.01
-                else:
-                    vol = 0.01
-            else:
-                # Fallback: use a reasonable default volatility
-                vol = 0.02  # 2% hourly vol as default
-                
-            if pd.isna(vol) or vol <= 0:
-                vol = 0.01
+            # Note: Database write complete - detailed feature calculations are done in calculate_model_prediction
             
         except Exception as e:
             print(f"\033[31m❌ DB write error for {currency}: {e}\033[0m")
@@ -1032,7 +1016,7 @@ def trade_currency_cycle(currency):
         best_ask = best_ask * 100 if best_ask is not None else None
         
         # Step 4: Ensure p_start is cached for this hour (needed for outcomes)
-        get_hour_start_price(currency, spot_price)
+        p_start = get_hour_start_price(currency, spot_price)
         
         # Step 4.5: Update outcomes for previous hour if we have the data
         current_hour_utc = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
@@ -1063,8 +1047,7 @@ def trade_currency_cycle(currency):
         else:
             print(f"  📈 {currency.upper()}: P=N/A M={market_price*100:.1f}%")
         
-        # Show features and p_start
-        p_start = get_hour_start_price(currency, spot_price)
+        # Show features and p_start (reuse already fetched p_start)
         r = (spot_price / p_start - 1) if p_start > 0 else 0
         current_minute = datetime.now(UTC).minute
         tau = max(1 - (current_minute / 60), 0.01)
@@ -1083,28 +1066,7 @@ def trade_currency_cycle(currency):
             print(f"    📊 Current: None")
         
         # Display trade result with target positions
-        if trade_result["executed"]:
-            print(f"    🟢 TRADED: {trade_result['direction']} exposure ${trade_result['target_exposure']:.2f}")
-            print(f"    ▶️ Target: YES {trade_result['target_yes']:.2f} | NO {trade_result['target_no']:.2f}")
-        elif trade_result["reason"] == "delta_too_small":
-            print(f"    ⚪ NO TRADE: Delta {trade_result['delta']:.1f}pp below threshold ({PROBABILITY_DELTA_THRESHOLD}pp)")
-            if 'target_yes' in trade_result and 'target_no' in trade_result:
-                print(f"    🗑️ Clearing positions: Target YES {trade_result['target_yes']:.2f} | NO {trade_result['target_no']:.2f}")
-        elif trade_result["reason"] == "insufficient_funds":
-            print(f"    🔴 NO TRADE: Need ${trade_result['needed']:.2f}, have ${trade_result['available']:.2f}")
-        elif trade_result["reason"] == "adjustment_too_small":
-            print(f"    🟡 NO TRADE: Adjustment {trade_result['adjustment']} below minimum")
-        elif trade_result["reason"] == "position_aligned":
-            print(f"    🟢 NO TRADE: Position already optimal")
-            print(f"    ▶️ Target: YES {trade_result['target_yes']:.2f} | NO {trade_result['target_no']:.2f}")
-        elif trade_result["reason"] == "no_bankroll_data":
-            print(f"    🔴 NO TRADE: Cannot fetch bankroll")
-        elif trade_result["reason"] == "delta_too_extreme":
-            print(f"    ⚪ NO TRADE: Delta {trade_result['delta']:.1f}pp is too extreme (>20pp)")
-        else:
-            print(f"    ⚪ NO TRADE: {trade_result['reason']}")
-            if 'target_yes' in trade_result and 'target_no' in trade_result:
-                print(f"    ▶️ Target: YES {trade_result['target_yes']:.2f} | NO {trade_result['target_no']:.2f}")
+        display_trade_result(trade_result)
         
         # Save data (already done above with decimal values)
         
@@ -1116,6 +1078,58 @@ def trade_currency_cycle(currency):
     except Exception as e:
         print(f"  ❌ {currency.upper()} error: {e}")
         return False
+
+def initialize_volatility_cache():
+    """Initialize volatility cache with last 20 minutes of historical price data for each currency."""
+    print("📊 Initializing volatility cache with historical data...")
+    
+    current_time = datetime.now(UTC)
+    twenty_minutes_ago = current_time - timedelta(minutes=20)
+    
+    for currency in CURRENCY_CONFIG:
+        try:
+            config = CURRENCY_CONFIG[currency]
+            
+            # Get 20 minutes of 1-minute klines from Binance
+            start_time_ms = int(twenty_minutes_ago.timestamp() * 1000)
+            end_time_ms = int(current_time.timestamp() * 1000)
+            
+            wait_for_rate_limit()
+            response = requests.get("https://api.binance.com/api/v3/klines", 
+                                  params={
+                                      "symbol": config['asset_symbol'], 
+                                      "interval": "1m",
+                                      "startTime": start_time_ms,
+                                      "endTime": end_time_ms,
+                                      "limit": 20
+                                  }, 
+                                  timeout=10)
+            response.raise_for_status()
+            
+            klines = response.json()
+            if klines:
+                # Convert klines to data points and add to cache
+                for kline in klines:
+                    # kline format: [open_time, open, high, low, close, volume, close_time, ...]
+                    timestamp_ms = kline[0]
+                    close_price = float(kline[4])  # Use close price
+                    
+                    # Convert to our data format
+                    timestamp_str = datetime.fromtimestamp(timestamp_ms / 1000, UTC).strftime('%Y-%m-%d %H:%M:%S')
+                    
+                    # Create a minimal data point for volatility calculation
+                    # Format: (timestamp, market_name, token_id, best_bid, best_ask, spot_price, ofi, prediction)
+                    data_point = (timestamp_str, "historical", "N/A", 0, 0, close_price, 0, None)
+                    state.data_cache[currency].append(data_point)
+                
+                print(f"  ✅ {currency.upper()}: Loaded {len(klines)} historical price points")
+            else:
+                print(f"  ⚠️ {currency.upper()}: No historical data available")
+                
+        except Exception as e:
+            print(f"  ❌ {currency.upper()}: Error loading historical data: {e}")
+    
+    print("📊 Volatility cache initialization complete")
 
 def initialize_system():
     """Initialize models and setup."""
@@ -1159,7 +1173,8 @@ def initialize_system():
         except Exception as e:
             print(f"❌ Error initializing Polymarket client: {e}")
     
-
+    # Initialize volatility cache with historical data
+    initialize_volatility_cache()
     
     print("🎯 System ready for continuous trading!")
 
