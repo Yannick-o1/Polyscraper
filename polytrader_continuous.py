@@ -14,6 +14,8 @@ import lightgbm as lgb
 import os
 import time
 import threading
+import csv
+import re
 from datetime import datetime, UTC, timedelta
 from collections import defaultdict, deque
 from zoneinfo import ZoneInfo
@@ -160,17 +162,201 @@ def get_hour_start_price(currency, current_crypto_price):
     print(f"\033[33m🔒 {currency.upper()}: Using current price ${current_crypto_price:.2f} as fallback for {hour_key}\033[0m")
     return current_crypto_price
 
+def get_all_markets():
+    """Fetches all markets from the Polymarket CLOB API using pagination."""
+    url = f"{CLOB_API_URL}/markets"
+    cursor = ""
+    while True:
+        try:
+            resp = requests.get(url, params={"next_cursor": cursor} if cursor else {}).json()
+            for m in resp["data"]:
+                yield m
+            cursor = resp["next_cursor"]
+            if cursor in ("", "LTE="):  # End of pagination
+                break
+        except requests.RequestException as e:
+            print(f"Error fetching markets: {e}")
+            break
+
+def is_currency_hourly_market(market, currency):
+    """Checks if a market is a currency hourly market based on its question."""
+    q = market["question"].lower()
+    currency_pattern = CURRENCY_CONFIG[currency]['market_question_pattern']
+    return currency_pattern in q and ("pm et" in q or "am et" in q)
+
+def parse_market_datetime(market_slug, market_question, currency):
+    """
+    Extracts the market's date and time from its slug or question.
+    Handles different slug formats and timezones, and corrects for year-end rollovers.
+    """
+    # Pattern 1: {currency}-up-or-down-{month}-{day}-{hour}{am|pm}-et
+    pattern1 = rf'{currency}-up-or-down-(\w+)-(\d+)-(\d+)(am|pm)-et'
+    match = re.match(pattern1, market_slug)
+    # Pattern 2: {currency}-up-or-down-{month}-{day}-{hour}-{am|pm}-et
+    if not match:
+        pattern2 = rf'{currency}-up-or-down-(\w+)-(\d+)-(\d+)-(am|pm)-et'
+        match = re.match(pattern2, market_slug)
+
+    et_tz = ZoneInfo("America/New_York")
+    now_in_et = datetime.now(et_tz)
+    
+    if match:
+        month_name, day, hour, ampm = match.groups()
+        try:
+            month = list(map(lambda x: x.lower(), ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'])).index(month_name.lower()) + 1
+            hour = int(hour)
+            if ampm.lower() == 'pm' and hour != 12:
+                hour += 12
+            elif ampm.lower() == 'am' and hour == 12:
+                hour = 0
+            
+            year = now_in_et.year
+            market_dt = datetime(year, month, int(day), hour, 0, 0, tzinfo=et_tz)
+            
+            # Only bump to next year if it's really far in the past (more than 6 months)
+            # This prevents 2025 dates from being incorrectly set to 2026
+            if market_dt < (now_in_et - timedelta(days=180)):
+                market_dt = market_dt.replace(year=year + 1)
+                
+            return market_dt.strftime("%Y-%m-%d %H:%M EDT")
+        except (ValueError, IndexError):
+            pass  # Fallback to question parsing
+
+    # Fallback: Parse date from question text, e.g., "June 10, 5 PM ET"
+    q_match = re.search(r'(\w+)\s+(\d+),?\s+(\d+)\s+(am|pm)\s+et', market_question, re.IGNORECASE)
+    if q_match:
+        month_name, day, hour, ampm = q_match.groups()
+        try:
+            month = list(map(lambda x: x.lower(), ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'])).index(month_name.lower()) + 1
+            hour = int(hour)
+            if ampm.lower() == 'pm' and hour != 12:
+                hour += 12
+            elif ampm.lower() == 'am' and hour == 12:
+                hour = 0
+
+            year = now_in_et.year
+            market_dt = datetime(year, month, int(day), hour, 0, 0, tzinfo=et_tz)
+
+            # Only bump to next year if it's really far in the past (more than 6 months)
+            # This prevents 2025 dates from being incorrectly set to 2026
+            if market_dt < (now_in_et - timedelta(days=180)):
+                market_dt = market_dt.replace(year=year + 1)
+
+            return market_dt.strftime("%Y-%m-%d %H:%M EDT")
+        except (ValueError, IndexError):
+            pass
+
+    return "Could not parse date"
+
+def update_markets_csv(currency):
+    """
+    Fetches all currency hourly markets and saves them to a CSV file.
+    """
+    market_data = []
+    print(f"\033[36m🔄 Updating {currency.upper()} market list...\033[0m")
+    print(f"Searching for {CURRENCY_CONFIG[currency]['name']} hourly markets...")
+    market_count = 0
+
+    for m in get_all_markets():
+        if not is_currency_hourly_market(m, currency):
+            continue
+        
+        market_count += 1
+        slug = m.get("market_slug")
+        question = m.get("question")
+        condition_id = m.get("condition_id")
+        
+        # Find the YES (Up) and NO (Down) tokens
+        token_id_yes = None
+        token_id_no = None
+        if m.get("tokens") and len(m["tokens"]) == 2:
+            # Polymarket's first token (index 0) is typically the "YES" outcome
+            token_id_yes = m["tokens"][0].get("token_id")
+            token_id_no = m["tokens"][1].get("token_id")
+        else:
+            token_id_yes, token_id_no = None, None
+
+        # Parse the date from the market
+        parsed_date = parse_market_datetime(slug, question, currency)
+        
+        print(f"Found market {market_count}: {slug}")
+        print(f"  Question: {question}")
+        print(f"  Token YES ID: {token_id_yes}")
+        print(f"  Token NO ID: {token_id_no}")
+        print(f"  Parsed Date: {parsed_date}")
+        
+        # Reject markets with missing essential data
+        if not all([slug, question, token_id_yes, token_id_no, parsed_date != "Could not parse date"]):
+            print(f"  -> REJECTED: Missing essential data")
+            print()
+            continue
+        
+        # Reject markets before July 18, 2025
+        try:
+            market_date = datetime.strptime(parsed_date.split(' ')[0], "%Y-%m-%d")
+            cutoff_date = datetime(2025, 7, 18)
+            if market_date < cutoff_date:
+                print(f"  -> REJECTED: Before July 18, 2025")
+                print()
+                continue
+        except (ValueError, IndexError):
+            print(f"  -> REJECTED: Invalid date format")
+            print()
+            continue
+        
+        print(f"  -> ACCEPTED")
+        print()
+        
+        # Add to market_data
+        market_data.append({
+            "market_name": question,
+            "token_id_yes": token_id_yes,
+            "token_id_no": token_id_no,
+            "date_time": parsed_date,
+            "market_slug": slug,
+            "condition_id": condition_id
+        })
+        
+        time.sleep(0.1)  # Small delay to be respectful to the API
+
+    if not market_data:
+        print(f"No {CURRENCY_CONFIG[currency]['name']} hourly markets found.")
+        return
+
+    # Sort by date_time - only valid dates will be here now
+    market_data.sort(key=lambda x: x['date_time'])
+
+    try:
+        markets_file = f"{currency}_polymarkets.csv"
+        with open(markets_file, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=["market_name", "token_id_yes", "token_id_no", "date_time", "market_slug", "condition_id"])
+            writer.writeheader()
+            writer.writerows(market_data)
+        print(f"\033[32m✅ Found {market_count} {CURRENCY_CONFIG[currency]['name']} hourly markets")
+        print(f"✅ Successfully wrote {len(market_data)} valid markets to {markets_file}\033[0m")
+    except IOError as e:
+        print(f"\033[31m❌ Error writing to file {markets_file}: {e}\033[0m")
+
 def get_market_data(currency):
     """Get current market token IDs for the current hour."""
     try:
         markets_file = f"{currency}_polymarkets.csv"
         
         if not os.path.exists(markets_file):
-            return None, None, None
+            print(f"\033[33m⚠️ No market file found for {currency}. Updating markets...\033[0m")
+            update_markets_csv(currency)
+            # Retry after updating
+            if not os.path.exists(markets_file):
+                return None, None, None
             
         df = pd.read_csv(markets_file)
         if df.empty:
-            return None, None, None
+            print(f"\033[33m⚠️ Empty market file for {currency}. Updating markets...\033[0m")
+            update_markets_csv(currency)
+            # Retry after updating
+            df = pd.read_csv(markets_file)
+            if df.empty:
+                return None, None, None
         
         # Get current hour and convert to ET timezone for market matching
         current_hour_utc = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
@@ -183,9 +369,21 @@ def get_market_data(currency):
         
         if matching_rows.empty:
             print(f"\033[33m⚠️ No market found for current hour: {target_datetime_str}\033[0m")
-            # Fall back to most recent market as backup
-            latest_market = df.iloc[-1]
-            print(f"   Using fallback market: {latest_market['market_name']}")
+            print(f"\033[36m🔄 Updating markets for {currency}...\033[0m")
+            update_markets_csv(currency)
+            
+            # Retry after updating
+            df = pd.read_csv(markets_file)
+            matching_rows = df[df['date_time'] == target_datetime_str]
+            
+            if matching_rows.empty:
+                print(f"\033[33m⚠️ Still no market found after update. Using fallback...\033[0m")
+                # Fall back to most recent market as backup
+                latest_market = df.iloc[-1]
+                print(f"   Using fallback market: {latest_market['market_name']}")
+            else:
+                latest_market = matching_rows.iloc[0]
+                print(f"\033[32m✅ Found market after update: {latest_market['market_name']}\033[0m")
         else:
             latest_market = matching_rows.iloc[0]
             # Market found - no need to log this every time
