@@ -675,14 +675,14 @@ def place_order(side, token_id, price, size_shares):
             return True
         else:
             error_msg = response.get('errorMsg', 'Unknown error')
-            if 'not enough balance' in error_msg.lower() or 'allowance' in error_msg.lower():
-                print(f"  ❌ Order failed: Insufficient balance/allowance - check Polymarket account")
-            else:
-                print(f"  ❌ Order failed: {error_msg}")
+            print(f"  ❌ TRADE FAILED: {side} {size_shares:.2f} shares @ ${optimal_price:.2f}")
+            print(f"     └─ Error: {error_msg}")
+            print(f"     └─ Token: {token_id}, Spread: ${spread:.4f} ({spread_percentage:.1f}%)")
             return False
             
     except Exception as e:
-        print(f"  ❌ Order error: {e}")
+        print(f"  ❌ TRADE FAILED: {side} {size_shares:.2f} shares - Exception: {e}")
+        print(f"     └─ Token: {token_id}")
         return False
 
 def execute_dynamic_position_management(currency, prediction, market_price, token_yes, token_no, best_bid, best_ask):
@@ -1112,8 +1112,8 @@ def trade_currency_cycle(currency):
         
         # Save data (already done above with decimal values)
         
-        # Write to database every cycle with fresh data
-        write_to_database(currency, timestamp, market_name, token_yes, best_bid, best_ask, spot_price, ofi, prediction)
+        # Write to database every cycle with fresh data (scale bid/ask for display)
+        write_to_database(currency, timestamp, market_name, token_yes, best_bid * 100, best_ask * 100, spot_price, ofi, prediction)
         
         return True
         
