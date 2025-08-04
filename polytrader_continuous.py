@@ -574,7 +574,7 @@ def calculate_model_prediction(currency, current_price, ofi, market_price):
         return None
 
 def place_order(side, token_id, price, size_shares):
-    """Place a BUY or SELL order on Polymarket."""
+    """Place a BUY or SELL order on Polymarket with optimal pricing."""
     if not state.polymarket_client:
         print(f"  ❌ Cannot place order: Polymarket client not available")
         return False
@@ -582,11 +582,37 @@ def place_order(side, token_id, price, size_shares):
     try:
         wait_for_rate_limit()
         
+        # Get current best bid and ask to calculate optimal price
+        best_bid, best_ask = get_order_book_prices(token_id)
+        if not best_bid or not best_ask:
+            print(f"  ❌ Cannot get order book for optimal pricing")
+            return False
+        
+        # Calculate spread and optimal price
+        spread = best_ask - best_bid
+        spread_35_percent = spread * 0.35
+        
+        if side == "BUY":
+            # For BUY orders, we want to pay less than ask
+            optimal_price = best_ask - spread_35_percent
+            # If optimal equals ask, go 1 cent better
+            if abs(optimal_price - best_ask) < 0.001:
+                optimal_price = best_ask - 0.01
+        else:  # SELL
+            # For SELL orders, we want to receive more than bid
+            optimal_price = best_bid + spread_35_percent
+            # If optimal equals bid, go 1 cent better
+            if abs(optimal_price - best_bid) < 0.001:
+                optimal_price = best_bid + 0.01
+        
+        # Round to 2 decimal places (nearest cent)
+        optimal_price = round(optimal_price, 2)
+        
         # Create order with 2-minute expiration
         expiration = int((datetime.now(UTC) + timedelta(minutes=2)).timestamp())
         
         order_args = OrderArgs(
-            price=round(price, 4),
+            price=optimal_price,
             size=size_shares,
             side=side,
             token_id=token_id,
@@ -597,7 +623,7 @@ def place_order(side, token_id, price, size_shares):
         response = state.polymarket_client.post_order(signed_order, OrderType.GTD)
         
         if response.get('success', False):
-            print(f"  ✅ {side} order placed: {size_shares:.2f} shares @ ${price:.4f}")
+            print(f"  ✅ {side} order placed: {size_shares:.2f} shares @ ${optimal_price:.2f} (spread: ${spread:.2f})")
             return True
         else:
             print(f"  ❌ Order failed: {response.get('errorMsg', 'Unknown error')}")
