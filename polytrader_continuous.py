@@ -107,8 +107,15 @@ def wait_for_rate_limit():
     state.api_call_times.append(now)
 
 def get_hour_start_price(currency, current_crypto_price):
-    """Get exact price from Binance at the precise start of the current hour."""
+    """Get exact price from Binance at the precise start of the current hour with maximum precision."""
     hour_key = datetime.now(UTC).strftime('%Y-%m-%d_%H')
+    
+    # Clear cache if we're in a new hour
+    current_hour = datetime.now(UTC).strftime('%Y-%m-%d_%H')
+    if hasattr(state, 'last_hour_key') and state.last_hour_key != current_hour:
+        state.hour_start_cache.clear()  # Clear cache for new hour
+        print(f"🔄 New hour detected, clearing p_start cache")
+    state.last_hour_key = current_hour
     
     # Check if we already have p_start cached for this hour
     if hour_key in state.hour_start_cache:
@@ -140,10 +147,10 @@ def get_hour_start_price(currency, current_crypto_price):
         klines = response.json()
         if klines:
             # Kline format: [open_time, open, high, low, close, volume, close_time, ...]
-            # Use opening price of the first minute of the hour
-            p_start = float(klines[0][1])  # open price
+            # Use opening price of the first minute of the hour with full precision
+            p_start = float(klines[0][1])  # open price - keep full precision
             state.hour_start_cache[hour_key][currency] = p_start
-            print(f"🔒 {currency.upper()}: Fetched exact hour start price ${p_start:.2f} from Binance for {hour_key}")
+            print(f"🔒 {currency.upper()}: Fetched exact hour start price ${p_start:.8f} from Binance for {hour_key}")
             return p_start
             
     except Exception as e:
@@ -151,7 +158,7 @@ def get_hour_start_price(currency, current_crypto_price):
     
     # Fallback to current price if Binance call fails
     state.hour_start_cache[hour_key][currency] = current_crypto_price
-    print(f"🔒 {currency.upper()}: Using current price ${current_crypto_price:.2f} as fallback for {hour_key}")
+    print(f"🔒 {currency.upper()}: Using current price ${current_crypto_price:.8f} as fallback for {hour_key}")
     return current_crypto_price
 
 def get_all_markets():
@@ -930,7 +937,7 @@ def trade_currency_cycle(currency):
         r = (spot_price / p_start - 1) if p_start > 0 else 0
         current_minute = datetime.now(UTC).minute
         tau = max(1 - (current_minute / 60), 0.01)
-        print(f"    📊 Features: r={r:.4f} τ={tau:.3f} p_start=${p_start:.2f}")
+        print(f"    📊 Features: r={r:.6f} τ={tau:.3f} p_start=${p_start:.8f}")
         
         # Show bid/ask and bankroll
         print(f"    💰 Bid: ${original_bid:.4f} | Ask: ${original_ask:.4f}")
