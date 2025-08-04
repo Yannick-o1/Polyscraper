@@ -637,7 +637,7 @@ def place_order(side, token_id, price, size_shares, current_bid=None, current_as
         spread = best_ask - best_bid
         
         # Don't trade if spread is too wide (>20 cents)
-        if spread > 0.20:
+        if spread > 20:
             print(f"  ❌ Spread too wide: ${spread:.2f} (>20¢) - skipping trade")
             return False
         
