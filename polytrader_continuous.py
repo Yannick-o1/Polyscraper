@@ -381,7 +381,7 @@ def get_market_data(currency):
             # Check if update was successful
             if not os.path.exists(markets_file):
                 print(f"❌ Failed to create market file for {currency}")
-                return None, None, None
+            return None, None, None
             
         df = pd.read_csv(markets_file)
         if df.empty:
@@ -661,6 +661,10 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
     
     if abs(delta) < PROBABILITY_DELTA_THRESHOLD:
         return {"executed": False, "reason": "delta_too_small", "delta": delta}
+    
+    # Prevent trading on extreme deltas (over 20pp)
+    if abs(delta) > 20.0:
+        return {"executed": False, "reason": "delta_too_extreme", "delta": delta}
     
     # Get current positions
     current_yes, current_no = get_current_position(token_yes, token_no)
@@ -942,6 +946,8 @@ def trade_currency_cycle(currency):
             print(f"    ▶️ Target: YES {trade_result['target_yes']:.2f} | NO {trade_result['target_no']:.2f}")
         elif trade_result["reason"] == "no_bankroll_data":
             print(f"    🔴 NO TRADE: Cannot fetch bankroll")
+        elif trade_result["reason"] == "delta_too_extreme":
+            print(f"    ⚪ NO TRADE: Delta {trade_result['delta']:.1f}pp is too extreme (>20pp)")
         else:
             print(f"    ⚪ NO TRADE: {trade_result['reason']}")
             if 'target_yes' in trade_result and 'target_no' in trade_result:
@@ -1033,7 +1039,7 @@ def continuous_trading_loop():
                 
                 # Only cancel if we're on a different currency than last time
                 if state.last_cancelled_currency != current_currency:
-                    cancel_all_open_orders()
+                cancel_all_open_orders()
                     state.last_cancelled_currency = current_currency
             
             # Trade current currency
@@ -1122,11 +1128,6 @@ def get_current_bankroll():
         allowance = float(usdc_account_info.get("allowance", 0)) / 1_000_000.0
         if allowance < usdc_balance:
             print(f"  ⚠️ Allowance (${allowance:.2f}) is less than balance (${usdc_balance:.2f})")
-            print(f"  🔧 Attempting to approve USDC allowance...")
-            if approve_usdc_allowance():
-                print(f"  ✅ Allowance approved - trading should work now")
-            else:
-                print(f"  ❌ Failed to approve allowance - please approve manually on Polymarket website")
         
         return usdc_balance
         
@@ -1165,34 +1166,6 @@ def get_current_position(token_id_yes, token_id_no):
     except Exception:
         # Don't let position lookup errors stop trading
         return 0, 0
-
-def approve_usdc_allowance():
-    """Approve USDC allowance for Polymarket trading."""
-    if not state.polymarket_client:
-        print(f"  ❌ Cannot approve allowance: Polymarket client not available")
-        return False
-    
-    try:
-        wait_for_rate_limit()
-        
-        # Approve USDC allowance
-        approval_params = BalanceAllowanceParams(
-            asset_type=AssetType.COLLATERAL,
-            signature_type=-1
-        )
-        
-        response = state.polymarket_client.approve_allowance(approval_params)
-        
-        if response.get('success', False):
-            print(f"  ✅ USDC allowance approved successfully")
-            return True
-        else:
-            print(f"  ❌ Failed to approve USDC allowance: {response.get('errorMsg', 'Unknown error')}")
-            return False
-            
-    except Exception as e:
-        print(f"  ❌ Error approving allowance: {e}")
-        return False
 
 
 # === MAIN EXECUTION ===
