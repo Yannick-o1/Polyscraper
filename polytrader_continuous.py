@@ -788,6 +788,62 @@ def save_data_point(currency, timestamp, market_name, token_id_yes, best_bid, be
     data_point = (timestamp, market_name, token_id_yes, best_bid, best_ask, spot_price, ofi, prediction)
     state.data_cache[currency].append(data_point)
 
+def ensure_outcome_column_exists(currency):
+    """Ensure the outcome column exists in the database table."""
+    try:
+        config = CURRENCY_CONFIG[currency]
+        with sqlite3.connect(f"{currency}_polyscraper.db") as conn:
+            cursor = conn.cursor()
+            
+            # Check if outcome column exists
+            cursor.execute("PRAGMA table_info(polydata)")
+            columns = [column[1] for column in cursor.fetchall()]
+            
+            if 'outcome' not in columns:
+                cursor.execute("ALTER TABLE polydata ADD COLUMN outcome TEXT")
+                print(f"  📊 Added outcome column to {currency} database")
+                
+    except Exception as e:
+        print(f"  ❌ Error ensuring outcome column for {currency}: {e}")
+
+def update_outcome_for_previous_hour(currency, current_hour_utc):
+    """Update outcome for the previous hour based on price comparison."""
+    try:
+        previous_hour_utc = current_hour_utc - timedelta(hours=1)
+        
+        # Get p_start for both hours
+        p_start_previous = state.hour_start_cache.get(previous_hour_utc.strftime('%Y-%m-%d_%H'))
+        p_start_current = state.hour_start_cache.get(current_hour_utc.strftime('%Y-%m-%d_%H'))
+        
+        if p_start_previous is None or p_start_current is None:
+            return  # Can't determine outcome without both prices
+            
+        # Determine outcome
+        if p_start_current > p_start_previous:
+            outcome = "UP"
+        elif p_start_current < p_start_previous:
+            outcome = "DOWN"
+        else:
+            outcome = "FLAT"
+            
+        # Update database for previous hour
+        hour_start_str = previous_hour_utc.strftime('%Y-%m-%d %H:%M:%S')
+        hour_end_str = current_hour_utc.strftime('%Y-%m-%d %H:%M:%S')
+        
+        with sqlite3.connect(f"{currency}_polyscraper.db") as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE polydata 
+                SET outcome = ? 
+                WHERE timestamp >= ? AND timestamp < ?
+            """, (outcome, hour_start_str, hour_end_str))
+            
+            if cursor.rowcount > 0:
+                print(f"  📈 Updated {cursor.rowcount} rows for {currency} previous hour: {outcome} (${p_start_previous:.2f} → ${p_start_current:.2f})")
+                
+    except Exception as e:
+        print(f"  ❌ Error updating outcome for {currency}: {e}")
+
 def write_to_database(currency):
     """Write latest data point to database every cycle."""
     if state.data_cache[currency]:
@@ -795,6 +851,9 @@ def write_to_database(currency):
             config = CURRENCY_CONFIG[currency]
             latest_data = state.data_cache[currency][-1]
             timestamp, market_name, token_id, best_bid, best_ask, spot_price, ofi, prediction = latest_data
+            
+            # Ensure outcome column exists
+            ensure_outcome_column_exists(currency)
             
             with sqlite3.connect(f"{currency}_polyscraper.db") as conn:
                 cursor = conn.cursor()
@@ -906,6 +965,10 @@ def trade_currency_cycle(currency):
         
         # Step 4: Ensure p_start is cached for this hour (needed for outcomes)
         get_hour_start_price(currency, spot_price)
+        
+        # Step 4.5: Update outcomes for previous hour if we have the data
+        current_hour_utc = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+        update_outcome_for_previous_hour(currency, current_hour_utc)
         
         # Step 5: Calculate prediction
         start = time.time()
