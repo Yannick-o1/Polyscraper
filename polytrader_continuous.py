@@ -1039,7 +1039,7 @@ def continuous_trading_loop():
                 
                 # Only cancel if we're on a different currency than last time
                 if state.last_cancelled_currency != current_currency:
-                cancel_all_open_orders()
+                    cancel_all_open_orders()
                     state.last_cancelled_currency = current_currency
             
             # Trade current currency
