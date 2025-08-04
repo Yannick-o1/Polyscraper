@@ -1110,10 +1110,8 @@ def trade_currency_cycle(currency):
         # Display trade result with target positions
         display_trade_result(trade_result)
         
-        # Save data (already done above with decimal values)
-        
         # Write to database every cycle with fresh data (scale bid/ask for display)
-        write_to_database(currency, timestamp, market_name, token_yes, best_bid * 100, best_ask * 100, spot_price, ofi, prediction)
+        write_to_database(currency, timestamp, market_name, token_yes, best_bid / 100, best_ask / 100, spot_price, ofi, prediction)
         
         return True
         
