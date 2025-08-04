@@ -590,6 +590,13 @@ def place_order(side, token_id, price, size_shares):
         
         # Calculate spread and optimal price
         spread = best_ask - best_bid
+        spread_percentage = (spread / best_bid) * 100
+        
+        # Don't trade if spread is too wide (>20%)
+        if spread_percentage > 20.0:
+            print(f"  ❌ Spread too wide: {spread_percentage:.1f}% (${spread:.2f}) - skipping trade")
+            return False
+        
         spread_35_percent = spread * 0.35
         
         if side == "BUY":
@@ -660,7 +667,7 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
     delta = (prediction - market_price) * 100
     
     if abs(delta) < PROBABILITY_DELTA_THRESHOLD:
-        return {"executed": False, "reason": "delta_too_small", "delta": delta}
+        return {"executed": False, "reason": "delta_too_small", "delta": delta, "target_yes": 0, "target_no": 0}
     
     # Prevent trading on extreme deltas (over 20pp)
     if abs(delta) > 20.0:
@@ -683,6 +690,12 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
         target_yes = 0
         target_no = target_exposure / (1 - market_price) if market_price < 1 else 0
         target_net = -target_no
+    
+    # If delta is below threshold, clear positions (target = 0)
+    if abs(delta) < PROBABILITY_DELTA_THRESHOLD:
+        target_yes = 0
+        target_no = 0
+        target_net = 0
     
     # Calculate adjustment needed
     position_adjustment = target_net - current_net
@@ -937,6 +950,8 @@ def trade_currency_cycle(currency):
             print(f"    ▶️ Target: YES {trade_result['target_yes']:.2f} | NO {trade_result['target_no']:.2f}")
         elif trade_result["reason"] == "delta_too_small":
             print(f"    ⚪ NO TRADE: Delta {trade_result['delta']:.1f}pp below threshold ({PROBABILITY_DELTA_THRESHOLD}pp)")
+            if 'target_yes' in trade_result and 'target_no' in trade_result:
+                print(f"    🗑️ Clearing positions: Target YES {trade_result['target_yes']:.2f} | NO {trade_result['target_no']:.2f}")
         elif trade_result["reason"] == "insufficient_funds":
             print(f"    🔴 NO TRADE: Need ${trade_result['needed']:.2f}, have ${trade_result['available']:.2f}")
         elif trade_result["reason"] == "adjustment_too_small":
