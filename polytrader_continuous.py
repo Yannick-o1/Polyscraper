@@ -381,11 +381,11 @@ def get_market_data(currency):
             # Check if update was successful
             if not os.path.exists(markets_file):
                 print(f"❌ Failed to create market file for {currency}")
-            return None, None, None
+                return None, None, None
             
         df = pd.read_csv(markets_file)
         if df.empty:
-                print(f"❌ No markets found for {currency} after update")
+            print(f"❌ No markets found for {currency} after update")
             return None, None, None
         
         # Now try to find the current market
@@ -1001,7 +1001,7 @@ def continuous_trading_loop():
                 
                 # Only cancel if we're on a different currency than last time
                 if state.last_cancelled_currency != current_currency:
-                cancel_all_open_orders()
+                    cancel_all_open_orders()
                     state.last_cancelled_currency = current_currency
             
             # Trade current currency
