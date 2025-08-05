@@ -680,7 +680,7 @@ def place_order(side, token_id, price, size_shares, current_bid=None, current_as
             error_msg = response.get('errorMsg', 'Unknown error')
             print(f"  ❌ TRADE FAILED: {side} {size_shares:.2f} shares @ ${optimal_price:.2f}")
             print(f"     └─ Error: {error_msg}")
-            print(f"     └─ Token: {token_id}, Spread: ${spread:.4f} ({spread_percentage:.1f}%)")
+            print(f"     └─ Token: {token_id}, Spread: ${spread:.4f}")
             return False
             
     except Exception as e:
@@ -1032,8 +1032,8 @@ def trade_currency_cycle(currency):
         if not best_bid or not best_ask:
             return False
         
-        # Calculate market price
-        market_price = (best_bid + best_ask) / 2
+        # Calculate market price (use original decimal values)
+        market_price = (original_bid + original_ask) / 2
         
         # Create timestamp for this cycle
         timestamp = datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')
@@ -1061,10 +1061,10 @@ def trade_currency_cycle(currency):
         # Store data in cache only if we're in a new minute (maintain 1-minute intervals)
         save_data_point_if_new_minute(currency, timestamp, market_name, token_yes, original_bid, original_ask, spot_price, ofi, prediction)
         
-        # Step 6: Execute trading logic
+        # Step 6: Execute trading logic (use original decimal values)
         start = time.time()
         trade_result = execute_dynamic_position_management(
-            currency, prediction, market_price, token_yes, token_no, best_bid, best_ask
+            currency, prediction, market_price, token_yes, token_no, original_bid, original_ask
         )
         timings['trading'] = time.time() - start
         
