@@ -733,7 +733,7 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
         # Bearish: want long NO position  
         target_yes = 0
         target_no = target_exposure / (1 - market_price) if market_price < 1 else 0
-        target_net = -target_no
+        target_net = target_no
     
     # If delta is below threshold, clear positions (target = 0)
     if abs(delta) < PROBABILITY_DELTA_THRESHOLD:
