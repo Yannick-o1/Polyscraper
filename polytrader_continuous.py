@@ -680,7 +680,7 @@ def place_order(side, token_id, price, size_shares, current_bid=None, current_as
             error_msg = response.get('errorMsg', 'Unknown error')
             print(f"  ❌ TRADE FAILED: {side} {size_shares:.2f} shares @ ${optimal_price:.2f}")
             print(f"     └─ Error: {error_msg}")
-            print(f"     └─ Token: {token_id}, Spread: ${spread:.4f} ({spread_percentage:.1f}%)")
+            print(f"     └─ Token: {token_id}, Spread: ${spread:.4f}")
             return False
             
     except Exception as e:
