@@ -793,19 +793,24 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
         # Need to buy more
         if delta > 0:
             # Buy YES tokens
+            print(f"  🔄 Attempting BUY YES: {abs(position_adjustment):.2f} shares @ ${best_ask/100:.4f}")
             success = place_order("BUY", token_yes, best_ask/100, abs(position_adjustment), best_bid/100, best_ask/100)
         else:
             # Buy NO tokens  
+            print(f"  🔄 Attempting BUY NO: {abs(position_adjustment):.2f} shares @ ${1 - best_bid/100:.4f}")
             success = place_order("BUY", token_no, 1 - best_bid/100, abs(position_adjustment))
     elif position_adjustment < 0:
         # Need to sell
         if current_yes > 0:
             # Sell YES tokens
+            print(f"  🔄 Attempting SELL YES: {abs(position_adjustment):.2f} shares @ ${best_bid/100:.4f}")
             success = place_order("SELL", token_yes, best_bid/100, abs(position_adjustment), best_bid/100, best_ask/100)
         elif current_no > 0:
             # Sell NO tokens
+            print(f"  🔄 Attempting SELL NO: {abs(position_adjustment):.2f} shares @ ${1 - best_ask/100:.4f}")
             success = place_order("SELL", token_no, 1 - best_ask/100, abs(position_adjustment))
         else:
+            print(f"  ❌ No positions to sell (YES: {current_yes}, NO: {current_no})")
             success = False
     
     return {
