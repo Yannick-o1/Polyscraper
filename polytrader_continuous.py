@@ -635,26 +635,26 @@ def place_order(side, token_id, price, size_shares, current_bid=None, current_as
         
         # Calculate spread and optimal price
         spread = best_ask - best_bid
+        midpoint = (best_bid + best_ask) / 2
         
         # Don't trade if spread is too wide (>20 cents)
         if spread > 20:
             print(f"  ❌ Spread too wide: ${spread:.2f} (>20¢) - skipping trade")
             return False
         
-        spread_35_percent = spread * 0.35
+        # Move 30% of half-spread toward favorable side from midpoint
+        half_spread_30_percent = (spread / 2) * 0.30
         
         if side == "BUY":
-            # For BUY orders, we want to pay less than ask
-            optimal_price = best_ask - spread_35_percent
-            # If optimal equals ask, go 1 cent better
-            if abs(optimal_price - best_ask) < 0.001:
-                optimal_price = best_ask - 0.01
+            # For BUY orders, pay LESS than midpoint (better for buyer)
+            optimal_price = midpoint - half_spread_30_percent
+            # Ensure we don't go below bid
+            optimal_price = max(optimal_price, best_bid + 0.01)
         else:  # SELL
-            # For SELL orders, we want to receive more than bid
-            optimal_price = best_bid + spread_35_percent
-            # If optimal equals bid, go 1 cent better
-            if abs(optimal_price - best_bid) < 0.001:
-                optimal_price = best_bid + 0.01
+            # For SELL orders, receive MORE than midpoint (better for seller)
+            optimal_price = midpoint + half_spread_30_percent
+            # Ensure we don't go above ask
+            optimal_price = min(optimal_price, best_ask - 0.01)
         
         # Round to 2 decimal places (nearest cent)
         optimal_price = round(optimal_price, 2)
@@ -716,6 +716,10 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
     # Prevent trading on extreme deltas (over 20pp)
     if abs(delta) > 20.0:
         return {"executed": False, "reason": "delta_too_extreme", "delta": delta}
+    
+    # Check if we're in first or last minute of the hour (no buying allowed)
+    current_minute = datetime.now(UTC).minute
+    in_restricted_minute = current_minute == 0 or current_minute == 59
     
     # Use passed positions (no API call needed)
     current_net = current_yes - current_no  # Net position (positive = bullish)
@@ -817,19 +821,23 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
         no_bid = 1 - best_ask/100
         no_ask = 1 - best_bid/100
         success = place_order("SELL", token_no, 1 - best_ask/100, shares_to_sell, no_bid, no_ask)
-    elif need_more_yes:
-        # Buy YES tokens
+    elif need_more_yes and not in_restricted_minute:
+        # Buy YES tokens (only if not in first/last minute)
         shares_to_buy = target_yes - current_yes
         print(f"  🔄 Attempting BUY YES: {shares_to_buy:.2f} shares @ ${best_ask/100:.4f}")
         success = place_order("BUY", token_yes, best_ask/100, shares_to_buy, best_bid/100, best_ask/100)
-    elif need_more_no:
-        # Buy NO tokens
+    elif need_more_no and not in_restricted_minute:
+        # Buy NO tokens (only if not in first/last minute)
         shares_to_buy = target_no - current_no
         print(f"  🔄 Attempting BUY NO: {shares_to_buy:.2f} shares @ ${1 - best_bid/100:.4f}")
         # For NO tokens: NO_bid = 1 - YES_ask, NO_ask = 1 - YES_bid
         no_bid = 1 - best_ask/100
         no_ask = 1 - best_bid/100
         success = place_order("BUY", token_no, 1 - best_bid/100, shares_to_buy, no_bid, no_ask)
+    elif (need_more_yes or need_more_no) and in_restricted_minute:
+        # Buying blocked during first/last minute
+        print(f"  ⏸️ BUY BLOCKED: Minute {current_minute} (no buying in first/last minute)")
+        success = True  # Don't treat as failure
 
     else:
         # No trade needed - positions are aligned
