@@ -688,7 +688,7 @@ def place_order(side, token_id, price, size_shares, current_bid=None, current_as
         print(f"     └─ Token: {token_id}")
         return False
 
-def execute_dynamic_position_management(currency, prediction, market_price, token_yes, token_no, best_bid, best_ask):
+def execute_dynamic_position_management(currency, prediction, market_price, token_yes, token_no, best_bid, best_ask, current_yes, current_no):
     """Execute position adjustment based on model prediction with position tracking."""
     if not prediction or not TRADING_ENABLED:
         return {"executed": False, "reason": "no_prediction_or_disabled"}
@@ -717,8 +717,7 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
     if abs(delta) > 20.0:
         return {"executed": False, "reason": "delta_too_extreme", "delta": delta}
     
-    # Get current positions
-    current_yes, current_no = get_current_position(token_yes, token_no)
+    # Use passed positions (no API call needed)
     current_net = current_yes - current_no  # Net position (positive = bullish)
     
     # Calculate target position using real bankroll
@@ -1089,10 +1088,15 @@ def trade_currency_cycle(currency):
         # Store data in cache only if we're in a new minute (maintain 1-minute intervals)
         save_data_point_if_new_minute(currency, timestamp, market_name, token_yes, original_bid, original_ask, spot_price, ofi, prediction)
         
-        # Step 6: Execute trading logic
+        # Step 6: Get current positions (do this once and reuse)
+        start = time.time()
+        current_yes, current_no = get_current_position(token_yes, token_no)
+        timings['positions'] = time.time() - start
+        
+        # Step 7: Execute trading logic (pass positions to avoid redundant API call)
         start = time.time()
         trade_result = execute_dynamic_position_management(
-            currency, prediction, market_price, token_yes, token_no, best_bid, best_ask
+            currency, prediction, market_price, token_yes, token_no, best_bid, best_ask, current_yes, current_no
         )
         timings['trading'] = time.time() - start
         
@@ -1133,8 +1137,7 @@ def trade_currency_cycle(currency):
         print(f"  🟨 FEATURES: r={r:.6f} | τ={tau:.3f} | vol={vol_info} | ofi={ofi:.4f}")
         print(f"  🟦 PRICES: spot=${spot_price:.8f} | p_start=${p_start:.8f} | bid=${original_bid:.4f} | ask=${original_ask:.4f}")
         
-        # 3. Positions & Bankroll
-        current_yes, current_no = get_current_position(token_yes, token_no)
+        # 3. Positions & Bankroll (use cached positions)
         current_pos_str = f"YES {current_yes:.2f} | NO {current_no:.2f}" if (current_yes > 0 or current_no > 0) else "None"
         bankroll_str = f"${state.current_bankroll:.2f}" if state.current_bankroll is not None else "N/A"
         print(f"  🟧 POSITIONS: {current_pos_str} | BANKROLL: {bankroll_str}")
