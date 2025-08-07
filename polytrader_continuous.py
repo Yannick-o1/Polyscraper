@@ -710,8 +710,8 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
     # Calculate delta and check threshold
     delta = (prediction - market_price) * 100
     
-    if abs(delta) < PROBABILITY_DELTA_THRESHOLD:
-        return {"executed": False, "reason": "delta_too_small", "delta": delta, "target_yes": 0, "target_no": 0}
+    # Note: We still need to call position management even when delta is below threshold
+    # to clear existing positions, so we don't return early here anymore
     
     # Prevent trading on extreme deltas (over 20pp)
     if abs(delta) > 20.0:
@@ -737,8 +737,6 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
     
     # If delta is below threshold, clear positions (target = 0)
     if abs(delta) < PROBABILITY_DELTA_THRESHOLD:
-        if current_yes > 0 or current_no > 0:
-            print(f"  ⚠️  Delta {delta:.1%} below threshold {PROBABILITY_DELTA_THRESHOLD:.1%} - CLEARING positions (YES: {current_yes:.1f} → 0, NO: {current_no:.1f} → 0)")
         target_yes = 0
         target_no = 0
         target_net = 0
@@ -802,8 +800,7 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
     need_less_yes = target_yes < current_yes
     need_less_no = target_no < current_no
     
-    # Debug: Show decision logic
-    print(f"  🔍 Trade Decision: YES({current_yes:.1f}→{target_yes:.1f}) NO({current_no:.1f}→{target_no:.1f}) | need_less_yes={need_less_yes} need_less_no={need_less_no}")
+
     
     # Prioritize selling positions when we need less (including when edge disappears)
     if need_less_yes:
