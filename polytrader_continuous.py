@@ -760,8 +760,12 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
             "adjustment": f"{position_adjustment:+.2f}"
         }
     
+    # Check if we're trying to clear positions (target = 0)
+    clearing_positions = (target_yes == 0 and current_yes > 0) or (target_no == 0 and current_no > 0)
+    
     # Allow position clearing (selling) even if adjustment is small
-    if abs(position_adjustment) < MINIMUM_ORDER_SIZE_SHARES and position_adjustment >= 0:
+    # Only block small adjustments if we're not clearing positions
+    if abs(position_adjustment) < MINIMUM_ORDER_SIZE_SHARES and position_adjustment >= 0 and not clearing_positions:
         return {
             "executed": False,
             "reason": "adjustment_too_small",
@@ -796,7 +800,18 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
     need_less_yes = target_yes < current_yes
     need_less_no = target_no < current_no
     
-    if need_more_yes:
+    # Prioritize selling/clearing positions when edge disappears (target = 0)
+    if need_less_yes and target_yes == 0:
+        # Clear YES position completely
+        shares_to_sell = current_yes - target_yes
+        print(f"  🔄 Attempting CLEAR YES: {shares_to_sell:.2f} shares @ ${best_bid/100:.4f}")
+        success = place_order("SELL", token_yes, best_bid/100, shares_to_sell, best_bid/100, best_ask/100)
+    elif need_less_no and target_no == 0:
+        # Clear NO position completely
+        shares_to_sell = current_no - target_no
+        print(f"  🔄 Attempting CLEAR NO: {shares_to_sell:.2f} shares @ ${1 - best_ask/100:.4f}")
+        success = place_order("SELL", token_no, 1 - best_ask/100, shares_to_sell)
+    elif need_more_yes:
         # Buy YES tokens
         shares_to_buy = target_yes - current_yes
         print(f"  🔄 Attempting BUY YES: {shares_to_buy:.2f} shares @ ${best_ask/100:.4f}")
@@ -807,12 +822,12 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
         print(f"  🔄 Attempting BUY NO: {shares_to_buy:.2f} shares @ ${1 - best_bid/100:.4f}")
         success = place_order("BUY", token_no, 1 - best_bid/100, shares_to_buy)
     elif need_less_yes:
-        # Sell YES tokens
+        # Reduce YES tokens (partial sell)
         shares_to_sell = current_yes - target_yes
         print(f"  🔄 Attempting SELL YES: {shares_to_sell:.2f} shares @ ${best_bid/100:.4f}")
         success = place_order("SELL", token_yes, best_bid/100, shares_to_sell, best_bid/100, best_ask/100)
     elif need_less_no:
-        # Sell NO tokens
+        # Reduce NO tokens (partial sell)
         shares_to_sell = current_no - target_no
         print(f"  🔄 Attempting SELL NO: {shares_to_sell:.2f} shares @ ${1 - best_ask/100:.4f}")
         success = place_order("SELL", token_no, 1 - best_ask/100, shares_to_sell)
