@@ -814,7 +814,10 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
         shares_to_sell = current_no - target_no
         action = "CLEAR" if target_no == 0 else "SELL"
         print(f"  🔄 Attempting {action} NO: {shares_to_sell:.2f} shares @ ${1 - best_ask/100:.4f}")
-        success = place_order("SELL", token_no, 1 - best_ask/100, shares_to_sell, best_bid/100, best_ask/100)
+        # For NO tokens: NO_bid = 1 - YES_ask, NO_ask = 1 - YES_bid
+        no_bid = 1 - best_ask/100
+        no_ask = 1 - best_bid/100
+        success = place_order("SELL", token_no, 1 - best_ask/100, shares_to_sell, no_bid, no_ask)
     elif need_more_yes:
         # Buy YES tokens
         shares_to_buy = target_yes - current_yes
@@ -824,7 +827,10 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
         # Buy NO tokens
         shares_to_buy = target_no - current_no
         print(f"  🔄 Attempting BUY NO: {shares_to_buy:.2f} shares @ ${1 - best_bid/100:.4f}")
-        success = place_order("BUY", token_no, 1 - best_bid/100, shares_to_buy, best_bid/100, best_ask/100)
+        # For NO tokens: NO_bid = 1 - YES_ask, NO_ask = 1 - YES_bid
+        no_bid = 1 - best_ask/100
+        no_ask = 1 - best_bid/100
+        success = place_order("BUY", token_no, 1 - best_bid/100, shares_to_buy, no_bid, no_ask)
 
     else:
         # No trade needed - positions are aligned
