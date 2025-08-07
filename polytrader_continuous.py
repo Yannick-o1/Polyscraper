@@ -737,6 +737,8 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
     
     # If delta is below threshold, clear positions (target = 0)
     if abs(delta) < PROBABILITY_DELTA_THRESHOLD:
+        if current_yes > 0 or current_no > 0:
+            print(f"  ⚠️  Delta {delta:.1%} below threshold {PROBABILITY_DELTA_THRESHOLD:.1%} - CLEARING positions (YES: {current_yes:.1f} → 0, NO: {current_no:.1f} → 0)")
         target_yes = 0
         target_no = 0
         target_net = 0
@@ -759,8 +761,12 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
             "adjustment": f"{position_adjustment:+.2f}"
         }
     
+    # Check if we're clearing positions due to delta below threshold
+    clearing_due_to_threshold = abs(delta) < PROBABILITY_DELTA_THRESHOLD and (current_yes > 0 or current_no > 0)
+    
     # Enforce minimum order size for all trades (5 shares minimum)
-    if abs(position_adjustment) < MINIMUM_ORDER_SIZE_SHARES:
+    # Exception: allow clearing positions when delta is below threshold
+    if abs(position_adjustment) < MINIMUM_ORDER_SIZE_SHARES and not clearing_due_to_threshold:
         return {
             "executed": False,
             "reason": "adjustment_too_small",
@@ -772,21 +778,22 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
             "adjustment": f"{position_adjustment:+.2f}"
         }
     
-    # Check if we have enough balance for the trade
-    trade_cost = abs(position_adjustment) * market_price if delta > 0 else abs(position_adjustment) * (1 - market_price)
-    if trade_cost > state.current_bankroll * 0.8:  # Use 80% of bankroll as safety
-        return {
-            "executed": False,
-            "reason": "insufficient_funds",
-            "delta": delta,
-            "current_yes": current_yes,
-            "current_no": current_no,
-            "target_yes": target_yes,
-            "target_no": target_no,
-            "adjustment": f"{position_adjustment:+.2f}",
-            "needed": trade_cost,
-            "available": state.current_bankroll
-        }
+    # Check if we have enough balance for the trade (only for buying, not selling)
+    if position_adjustment > 0:  # Only check balance when buying (positive adjustment)
+        trade_cost = abs(position_adjustment) * market_price if delta > 0 else abs(position_adjustment) * (1 - market_price)
+        if trade_cost > state.current_bankroll * 0.8:  # Use 80% of bankroll as safety
+            return {
+                "executed": False,
+                "reason": "insufficient_funds",
+                "delta": delta,
+                "current_yes": current_yes,
+                "current_no": current_no,
+                "target_yes": target_yes,
+                "target_no": target_no,
+                "adjustment": f"{position_adjustment:+.2f}",
+                "needed": trade_cost,
+                "available": state.current_bankroll
+            }
     
         # Execute real trades
     # Determine what we need to do based on target vs current positions
@@ -794,6 +801,9 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
     need_more_no = target_no > current_no
     need_less_yes = target_yes < current_yes
     need_less_no = target_no < current_no
+    
+    # Debug: Show decision logic
+    print(f"  🔍 Trade Decision: YES({current_yes:.1f}→{target_yes:.1f}) NO({current_no:.1f}→{target_no:.1f}) | need_less_yes={need_less_yes} need_less_no={need_less_no}")
     
     # Prioritize selling positions when we need less (including when edge disappears)
     if need_less_yes:
