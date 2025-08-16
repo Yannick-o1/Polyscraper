@@ -829,23 +829,19 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
         no_bid = 1 - best_ask/100
         no_ask = 1 - best_bid/100
         success = place_order("SELL", token_no, 1 - best_ask/100, shares_to_sell, no_bid, no_ask)
-    elif need_more_yes and not in_restricted_minute:
-        # Buy YES tokens (only if not in first/last minute)
+    elif need_more_yes:
+        # Buy YES tokens
         shares_to_buy = target_yes - current_yes
         print(f"  🔄 Attempting BUY YES: {shares_to_buy:.2f} shares @ ${best_ask/100:.4f}")
         success = place_order("BUY", token_yes, best_ask/100, shares_to_buy, best_bid/100, best_ask/100)
-    elif need_more_no and not in_restricted_minute:
-        # Buy NO tokens (only if not in first/last minute)
+    elif need_more_no:
+        # Buy NO tokens
         shares_to_buy = target_no - current_no
         print(f"  🔄 Attempting BUY NO: {shares_to_buy:.2f} shares @ ${1 - best_bid/100:.4f}")
         # For NO tokens: NO_bid = 1 - YES_ask, NO_ask = 1 - YES_bid
         no_bid = 1 - best_ask/100
         no_ask = 1 - best_bid/100
         success = place_order("BUY", token_no, 1 - best_bid/100, shares_to_buy, no_bid, no_ask)
-    elif (need_more_yes or need_more_no) and in_restricted_minute:
-        # Buying blocked during first/last minute
-        print(f"  ⏸️ BUY BLOCKED: Minute {current_minute} (no buying in first/last minute)")
-        success = True  # Don't treat as failure
 
     else:
         # No trade needed - positions are aligned
