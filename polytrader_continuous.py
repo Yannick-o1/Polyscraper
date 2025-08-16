@@ -546,8 +546,12 @@ def calculate_model_prediction(currency, current_price, ofi, market_price):
         p_start = get_hour_start_price(currency, current_price)
         r = (current_price / p_start - 1) if p_start > 0 else 0
         
-        current_minute = datetime.now(UTC).minute
-        tau = max(1 - (current_minute / 60), 0.01)
+        current_time = datetime.now(UTC)
+        current_minute = current_time.minute
+        current_second = current_time.second
+        # Calculate precise time-to-expiry including seconds
+        time_elapsed_in_hour = (current_minute * 60 + current_second) / 3600  # Convert to fraction of hour
+        tau = max(1 - time_elapsed_in_hour, 0.01)
         
         # Enhanced volatility calculation - use last 20 data points like polyscraper.py
         vol = 0.02  # Default fallback
@@ -1130,8 +1134,12 @@ def trade_currency_cycle(currency):
         
         # 2. Model Features (include volatility!)
         r = (spot_price / p_start - 1) if p_start > 0 else 0
-        current_minute = datetime.now(UTC).minute
-        tau = max(1 - (current_minute / 60), 0.01)
+        current_time = datetime.now(UTC)
+        current_minute = current_time.minute
+        current_second = current_time.second
+        # Calculate precise time-to-expiry including seconds
+        time_elapsed_in_hour = (current_minute * 60 + current_second) / 3600  # Convert to fraction of hour
+        tau = max(1 - time_elapsed_in_hour, 0.01)
         
         # Get volatility info from the prediction calculation
         vol_info = "N/A"
