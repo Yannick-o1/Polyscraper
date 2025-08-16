@@ -717,9 +717,17 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
     if abs(delta) > 20.0:
         return {"executed": False, "reason": "delta_too_extreme", "delta": delta}
     
-    # Check if we're in first or last minute of the hour (no buying allowed)
+    # Check if we're in first 2 or last 2 minutes of the hour (no trading allowed)
     current_minute = datetime.now(UTC).minute
-    in_restricted_minute = current_minute == 0 or current_minute == 59
+    in_restricted_time = current_minute <= 1 or current_minute >= 58
+    
+    if in_restricted_time:
+        return {"executed": False, "reason": "restricted_time_window", "minute": current_minute}
+    
+    # Check if spread is 0 cents (no trading allowed when spread is 0)
+    spread = best_ask - best_bid
+    if spread <= 0.0:
+        return {"executed": False, "reason": "zero_spread", "bid": best_bid, "ask": best_ask}
     
     # Use passed positions (no API call needed)
     current_net = current_yes - current_no  # Net position (positive = bullish)
@@ -884,6 +892,10 @@ def display_trade_result(trade_result):
         print(f"  🟥 NO TRADE: Cannot fetch bankroll")
     elif trade_result["reason"] == "delta_too_extreme":
         print(f"  ⬜ NO TRADE: Delta {trade_result['delta']:.1f}pp is too extreme (>20pp)")
+    elif trade_result["reason"] == "restricted_time_window":
+        print(f"  ⏰ NO TRADE: Restricted time window (minute {trade_result['minute']})")
+    elif trade_result["reason"] == "zero_spread":
+        print(f"  📊 NO TRADE: Zero spread (bid=${trade_result['bid']:.4f}, ask=${trade_result['ask']:.4f})")
     else:
         print(f"  ⬜ NO TRADE: {trade_result['reason']}")
         if 'target_yes' in trade_result and 'target_no' in trade_result:

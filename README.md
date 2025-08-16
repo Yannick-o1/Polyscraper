@@ -98,3 +98,27 @@ This is experimental trading software. Only use with funds you can afford to los
 - **APIs**: Binance (price data), Polymarket (trading)
 - **Database**: SQLite for data storage
 - **Deployment**: AWS EC2 with systemd
+
+
+C/P:
+
+git add .
+
+git commit -m "ADD"
+git push origin main
+
+sudo systemctl stop polytrader
+
+sudo cp polytrader.service /etc/systemd/system/
+
+sudo systemctl daemon-reload
+
+sudo systemctl start polytrader
+
+sudo journalctl -f -u polytrader
+
+chmod 400 /Users/yannickofungi/Downloads/aws-github-runner.pem 
+ssh -i /Users/yannickofungi/Downloads/aws-github-runner.pem  ubuntu@3.71.4.27
+
+cd ~/Polyscraper
+source venv/bin/activate
