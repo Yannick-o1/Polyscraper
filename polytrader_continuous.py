@@ -25,7 +25,6 @@ try:
     from py_clob_client.client import ClobClient
     from py_clob_client.clob_types import OrderArgs, OrderType, BalanceAllowanceParams, AssetType
     from py_clob_client.order_builder.constants import BUY, SELL
-from datetime import datetime
     POLYMARKET_AVAILABLE = True
 except ImportError:
     print("⚠️ Warning: py-clob-client not installed. Trading disabled.")
