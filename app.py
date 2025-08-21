@@ -57,6 +57,7 @@ HOME_TEMPLATE = """
 <body>
     <h1>Select a currency to view its data:</h1>
     <ul>
+        <li><a href="{{ url_for('all_page') }}">All</a></li>
         {% for currency_code, currency_data in currencies.items() %}
             <li><a href="{{ url_for('view_data', currency=currency_code) }}">{{ currency_data.name }}</a></li>
         {% endfor %}
@@ -131,8 +132,8 @@ DATA_VIEWER_TEMPLATE = """
                 <td>{{ row.spot_price|format_price(spot_decimals) }}</td>
                 <td>{{ "%.4f"|format(row.ofi) if row.ofi is not none else 'N/A' }}</td>
                 <td>{{ "%.2f"|format(row.p_up_prediction * 100) if row.p_up_prediction is not none else 'N/A' }}</td>
-                <td>{{ "%.2f"|format(row.best_bid * 100) if row.best_bid is not none else 'N/A' }}</td>
-                <td>{{ "%.2f"|format(row.best_ask * 100) if row.best_ask is not none else 'N/A' }}</td>
+                <td>{{ (row.best_bid * 100)|int if row.best_bid is not none else 'N/A' }}</td>
+                <td>{{ (row.best_ask * 100)|int if row.best_ask is not none else 'N/A' }}</td>
                 <td>{{ "%.2f"|format((row.p_up_prediction - ((row.best_bid + row.best_ask) / 2.0)) * 100) if row.p_up_prediction is not none and row.best_bid is not none and row.best_ask is not none else 'N/A' }}</td>
             </tr>
             {% endfor %}
