@@ -981,20 +981,6 @@ def ensure_outcome_column_exists(currency):
     except Exception as e:
         log_error("ensuring outcome column", currency, e)
 
-def ensure_vol_column_exists(currency):
-    """Ensure the vol column exists in the database table."""
-    try:
-        with get_db_connection(currency) as conn:
-            cursor = conn.cursor()
-            cursor.execute("PRAGMA table_info(polydata)")
-            columns = [column[1] for column in cursor.fetchall()]
-
-            if 'vol' not in columns:
-                cursor.execute("ALTER TABLE polydata ADD COLUMN vol REAL")
-                print(f"  📊 Added vol column to {currency} database")
-    except Exception as e:
-        log_error("ensuring vol column", currency, e)
-
 def get_p_start_price_for_hour(currency, hour_utc):
     """Get p_start price for a specific hour from Binance API."""
     try:
@@ -1091,22 +1077,20 @@ def update_outcome_for_previous_hour(currency, current_hour_utc):
     except Exception as e:
         log_error("updating outcome", currency, e)
 
-def write_to_database(currency, timestamp, market_name, token_id, best_bid, best_ask, spot_price, ofi, vol, prediction):
-    """Write current cycle data point to database with fresh timestamp, including volatility."""
+def write_to_database(currency, timestamp, market_name, token_id, best_bid, best_ask, spot_price, ofi, prediction):
+    """Write current cycle data point to database with fresh timestamp."""
     try:
         config = CURRENCY_CONFIG[currency]
-        data_tuple = (timestamp, market_name, token_id, best_bid, best_ask, spot_price, ofi, vol, prediction)
+        data_tuple = (timestamp, market_name, token_id, best_bid, best_ask, spot_price, ofi, prediction)
         
         # Ensure outcome column exists
         ensure_outcome_column_exists(currency)
-        # Ensure vol column exists
-        ensure_vol_column_exists(currency)
         
         with get_db_connection(currency) as conn:
             cursor = conn.cursor()
             cursor.execute(f'''
-                INSERT INTO polydata (timestamp, market_name, token_id, best_bid, best_ask, {config['db_column']}, ofi, vol, p_up_prediction)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO polydata (timestamp, market_name, token_id, best_bid, best_ask, {config['db_column']}, ofi, p_up_prediction)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ''', data_tuple)
         
     except Exception as e:
@@ -1204,8 +1188,7 @@ def trade_currency_cycle(currency):
         time_elapsed_in_hour = (current_minute * 60 + current_second) / 3600  # Convert to fraction of hour
         tau = max(1 - time_elapsed_in_hour, 0.01)
         
-        # Compute current volatility (numeric) from cache for DB and for info
-        vol_numeric = 0.02
+        # Get volatility info from the prediction calculation
         vol_info = "N/A"
         if currency in state.data_cache and len(state.data_cache[currency]) >= 3:
             recent_data = list(state.data_cache[currency])[-30:] if len(state.data_cache[currency]) >= 30 else list(state.data_cache[currency])
@@ -1219,8 +1202,8 @@ def trade_currency_cycle(currency):
                     if not rolling_vol_series.empty:
                         latest_vol = rolling_vol_series.iloc[-1]
                         if not pd.isna(latest_vol) and latest_vol > 0:
-                            vol_numeric = float(latest_vol * np.sqrt(60))
-                            vol_info = f"{vol_numeric:.4f} (w={window_size})"
+                            vol_hourly = latest_vol * np.sqrt(60)
+                            vol_info = f"{vol_hourly:.4f} (w={window_size})"
         
         print(f"  🟨 FEATURES: r={r:.6f} | τ={tau:.3f} | vol={vol_info} | ofi={ofi:.4f}")
         print(f"  🟦 PRICES: spot=${spot_price:.8f} | p_start=${p_start:.8f} | bid=${original_bid:.4f} | ask=${original_ask:.4f}")
@@ -1234,19 +1217,7 @@ def trade_currency_cycle(currency):
         display_trade_result(trade_result)
         
         # Write to database every cycle with fresh data (scale bid/ask for display)
-        market_name_clean = market_name.replace(' Up or Down - ', ' - ')
-        write_to_database(
-            currency,
-            timestamp,
-            market_name_clean,
-            token_yes,
-            best_bid / 100,
-            best_ask / 100,
-            spot_price,
-            ofi,
-            vol_numeric,
-            prediction,
-        )
+        write_to_database(currency, timestamp, market_name, token_yes, best_bid / 100, best_ask / 100, spot_price, ofi, prediction)
         
         return True
         
