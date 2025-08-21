@@ -66,25 +66,60 @@ HOME_TEMPLATE = """
 </html>
 """
 
-# Simple page that lists all currencies (same as home) but titled "All"
-ALL_TEMPLATE = """
+# Combined view across all currencies
+ALL_DATA_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>All</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>All Currencies</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 2em; }
+        body { font-family: Arial, sans-serif; margin: 2em; background-color: #f4f4f4; }
+        h1 { color: #333; }
+        table { width: 100%; border-collapse: collapse; margin-top: 1em; }
+        th, td { padding: 8px 12px; border: 1px solid #ddd; text-align: left; }
+        th { background-color: #e9e9e9; }
+        tr:nth-child(even) { background-color: #f9f9f9; }
     </style>
+    
 </head>
 <body>
-    <h1>All</h1>
-    <ul>
-        {% for currency_code, currency_data in currencies.items() %}
-            <li><a href="{{ url_for('view_data', currency=currency_code) }}">{{ currency_data.name }}</a></li>
-        {% endfor %}
-    </ul>
-    <p><a href="{{ url_for('home') }}">Back to Home</a></p>
+    <a href="{{ url_for('home') }}">Back to Home</a>
+    <h1>All Currencies - Latest Data</h1>
+    <p>Displaying the most recent entries across all currencies, ordered by timestamp.</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Timestamp (UTC)</th>
+                <th>Currency</th>
+                <th>Market Name</th>
+                <th>Outcome</th>
+                <th>Spot Price (USDT)</th>
+                <th>OFI</th>
+                <th>P(Up) Prediction</th>
+                <th>Best Bid (%)</th>
+                <th>Best Ask (%)</th>
+                <th>Delta</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in data %}
+            <tr>
+                <td>{{ row.timestamp }}</td>
+                <td>{{ row.currency_name }}</td>
+                <td>{{ row.market_name }}</td>
+                <td>{{ row.outcome if row.outcome else 'N/A' }}</td>
+                <td>{{ row.spot_price|format_price(row.spot_decimals) }}</td>
+                <td>{{ "%.4f"|format(row.ofi) if row.ofi is not none else 'N/A' }}</td>
+                <td>{{ "%.2f"|format(row.p_up_prediction * 100) if row.p_up_prediction is not none else 'N/A' }}</td>
+                <td>{{ (row.best_bid * 100)|int if row.best_bid is not none else 'N/A' }}</td>
+                <td>{{ (row.best_ask * 100)|int if row.best_ask is not none else 'N/A' }}</td>
+                <td>{{ "%.2f"|format((row.p_up_prediction - ((row.best_bid + row.best_ask) / 2.0)) * 100) if row.p_up_prediction is not none and row.best_bid is not none and row.best_ask is not none else 'N/A' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
 </body>
 </html>
 """
@@ -149,7 +184,47 @@ def home():
 
 @app.route('/all', methods=['GET'])
 def all_page():
-    return render_template_string(ALL_TEMPLATE, currencies=CURRENCIES)
+    # Collect recent rows from each currency DB, merge, sort by timestamp desc
+    merged = []
+    for code, cfg in CURRENCIES.items():
+        db_path = os.path.join(BASE_DIR, cfg['db_file'])
+        spot_price_column = f"{code}_usdt_spot"
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='polydata';")
+            if cur.fetchone() is None:
+                conn.close()
+                continue
+            query = f"SELECT timestamp, market_name, best_bid, best_ask, {spot_price_column} as spot_price, ofi, p_up_prediction, outcome FROM polydata ORDER BY timestamp DESC LIMIT 150"
+            cur.execute(query)
+            rows = cur.fetchall()
+            conn.close()
+            for r in rows:
+                merged.append({
+                    'timestamp': r['timestamp'],
+                    'market_name': r['market_name'],
+                    'best_bid': r['best_bid'],
+                    'best_ask': r['best_ask'],
+                    'spot_price': r['spot_price'],
+                    'ofi': r['ofi'],
+                    'p_up_prediction': r['p_up_prediction'],
+                    'outcome': r['outcome'],
+                    'currency_code': code,
+                    'currency_name': cfg['name'],
+                    'spot_decimals': cfg['spot_decimals'],
+                })
+        except Exception:
+            # Skip a currency if its DB isn't ready
+            continue
+
+    # Sort by timestamp desc (timestamps are ISO strings)
+    merged.sort(key=lambda x: x['timestamp'], reverse=True)
+    # Limit overall rows for performance
+    merged = merged[:400]
+
+    return render_template_string(ALL_DATA_TEMPLATE, data=merged)
 
 @app.route('/run-scraper/<currency>', methods=['POST'])
 def run_scraper(currency):
