@@ -697,8 +697,8 @@ def place_order(side, token_id, price, size_shares, current_bid=None, current_as
         midpoint = (best_bid + best_ask) / 2
         
         # Don't trade if spread is too wide (>20 cents)
-        if spread > 20:
-            print(f"  ❌ Spread too wide: ${spread:.2f} (>20¢) - skipping trade")
+        if spread > 30:
+            print(f"  ❌ Spread too wide: ${spread:.2f} (>30¢) - skipping trade")
             return False
         
         # Move 30% of half-spread toward favorable side from midpoint
@@ -757,12 +757,7 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
     if current_time - state.last_bankroll_check > 60:  # Check every minute
         state.current_bankroll = get_current_bankroll()
         state.last_bankroll_check = current_time
-        
-        if state.current_bankroll is not None:
-            print(f"  💰 Current bankroll: ${state.current_bankroll:.2f}")
-        else:
-            print(f"  ⚠️ Could not fetch bankroll, using last known value")
-    
+              
     if state.current_bankroll is None:
         return {"executed": False, "reason": "no_bankroll_data"}
     
@@ -1350,7 +1345,7 @@ def continuous_trading_loop():
             
             # Cancel all open orders every 3 cycles
             if TRADING_ENABLED and cycle_count % 3 == 1:
-                print(f"🟥 CANCELLING ALL OPEN ORDERS (Cycle {cycle_count})")
+                print(f"  🟥 CANCELLING ALL OPEN ORDERS (Cycle {cycle_count})")
                 cancel_all_open_orders()
             
             # Trade current currency
