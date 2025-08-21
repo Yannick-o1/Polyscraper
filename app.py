@@ -135,8 +135,8 @@ def run_scraper(currency):
         
         # Updated to use the new consolidated script with currency argument
         # Note: polytrader_continuous.py runs all currencies automatically
-    # For now, just run a test cycle
-    subprocess.Popen([python_executable, script_path, '--test'])
+        # For now, just run a test cycle
+        subprocess.Popen([python_executable, script_path, '--test'])
         return jsonify({"status": "success", "message": f"{config['name']} scraper job initiated."}), 202
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
