@@ -25,6 +25,7 @@ try:
     from py_clob_client.client import ClobClient
     from py_clob_client.clob_types import OrderArgs, OrderType, BalanceAllowanceParams, AssetType
     from py_clob_client.order_builder.constants import BUY, SELL
+from datetime import datetime
     POLYMARKET_AVAILABLE = True
 except ImportError:
     print("⚠️ Warning: py-clob-client not installed. Trading disabled.")
@@ -878,11 +879,19 @@ def execute_dynamic_position_management(currency, prediction, market_price, toke
         no_ask = 1 - best_bid/100
         success = place_order("SELL", token_no, 1 - best_ask/100, shares_to_sell, no_bid, no_ask)
     elif need_more_yes:
+        # Prevent BUYs during last 2 minutes and first 1 minute of the hour (UTC)
+        now_minute = datetime.utcnow().minute
+        if now_minute in (58, 59, 0):
+            return {"executed": False, "reason": "buy_blackout_window", "window": "minute in [58,59,0] UTC"}
         # Buy YES tokens
         shares_to_buy = target_yes - current_yes
         print(f"  🔄 Attempting BUY YES: {shares_to_buy:.2f} shares @ ${best_ask/100:.4f}")
         success = place_order("BUY", token_yes, best_ask/100, shares_to_buy, best_bid/100, best_ask/100)
     elif need_more_no:
+        # Prevent BUYs during last 2 minutes and first 1 minute of the hour (UTC)
+        now_minute = datetime.utcnow().minute
+        if now_minute in (58, 59, 0):
+            return {"executed": False, "reason": "buy_blackout_window", "window": "minute in [58,59,0] UTC"}
         # Buy NO tokens
         shares_to_buy = target_no - current_no
         print(f"  🔄 Attempting BUY NO: {shares_to_buy:.2f} shares @ ${1 - best_bid/100:.4f}")
