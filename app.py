@@ -15,6 +15,15 @@ def format_price(value, decimals):
         return 'N/A'
     return f"{value:.{decimals}f}"
 
+# Custom filter to clean market names
+@app.template_filter('clean_market')
+def clean_market(value):
+    if not value:
+        return 'N/A'
+    # Remove the phrase 'Up or Down' optionally followed by a hyphen
+    cleaned = value.replace(' Up or Down - ', ' - ').replace(' Up or Down', '')
+    return cleaned
+
 # --- Configuration for multiple currencies ---
 CURRENCIES = {
     'btc': {
@@ -108,7 +117,7 @@ ALL_DATA_TEMPLATE = """
             <tr>
                 <td>{{ row.timestamp }}</td>
                 <td>{{ row.currency_name }}</td>
-                <td>{{ row.market_name|replace(' Up or Down - ', ' - ') }}</td>
+                <td>{{ row.market_name|clean_market }}</td>
                 <td>{{ row.outcome if row.outcome else 'N/A' }}</td>
                 <td>{{ row.spot_price|format_price(row.spot_decimals) }}</td>
                 <td>{{ "%.4f"|format(row.ofi) if row.ofi is not none else 'N/A' }}</td>
@@ -162,7 +171,7 @@ DATA_VIEWER_TEMPLATE = """
             {% for row in data %}
             <tr>
                 <td>{{ row.timestamp }}</td>
-                <td>{{ row.market_name|replace(' Up or Down - ', ' - ') }}</td>
+                <td>{{ row.market_name|clean_market }}</td>
                 <td>{{ row.outcome if row.outcome else 'N/A' }}</td>
                 <td>{{ row.spot_price|format_price(spot_decimals) }}</td>
                 <td>{{ "%.4f"|format(row.ofi) if row.ofi is not none else 'N/A' }}</td>
@@ -197,10 +206,7 @@ def all_page():
             if cur.fetchone() is None:
                 conn.close()
                 continue
-            query = (
-                f"SELECT timestamp, market_name, best_bid, best_ask, {spot_price_column} as spot_price, ofi, "
-                f"p_up_prediction, outcome FROM polydata ORDER BY timestamp DESC LIMIT 150"
-            )
+            query = f"SELECT timestamp, market_name, best_bid, best_ask, {spot_price_column} as spot_price, ofi, p_up_prediction, outcome FROM polydata ORDER BY timestamp DESC LIMIT 150"
             cur.execute(query)
             rows = cur.fetchall()
             conn.close()
@@ -270,10 +276,7 @@ def view_data(currency):
         if cursor.fetchone() is None:
             return f"<h1>Data not available yet</h1><p>The table 'polydata' does not exist in {config['db_file']}. Please run the scraper for {config['name']}.</p>", 404
         
-        query = (
-            f"SELECT timestamp, market_name, best_bid, best_ask, {spot_price_column} as spot_price, ofi, "
-            f"p_up_prediction, outcome FROM polydata ORDER BY timestamp DESC LIMIT 250"
-        )
+        query = f"SELECT timestamp, market_name, best_bid, best_ask, {spot_price_column} as spot_price, ofi, p_up_prediction, outcome FROM polydata ORDER BY timestamp DESC LIMIT 250"
         cursor.execute(query)
         data = cursor.fetchall()
         
