@@ -97,6 +97,7 @@ ALL_DATA_TEMPLATE = """
                 <th>Outcome</th>
                 <th>Spot Price (USDT)</th>
                 <th>OFI</th>
+                <th>VOL</th>
                 <th>P(Up) Prediction</th>
                 <th>Best Bid (%)</th>
                 <th>Best Ask (%)</th>
@@ -108,10 +109,11 @@ ALL_DATA_TEMPLATE = """
             <tr>
                 <td>{{ row.timestamp }}</td>
                 <td>{{ row.currency_name }}</td>
-                <td>{{ row.market_name }}</td>
+                <td>{{ row.market_name|replace(' Up or Down - ', ' - ') }}</td>
                 <td>{{ row.outcome if row.outcome else 'N/A' }}</td>
                 <td>{{ row.spot_price|format_price(row.spot_decimals) }}</td>
                 <td>{{ "%.4f"|format(row.ofi) if row.ofi is not none else 'N/A' }}</td>
+                <td>{{ "%.2f"|format(row.vol) if row.vol is not none else 'N/A' }}</td>
                 <td>{{ "%.2f"|format(row.p_up_prediction * 100) if row.p_up_prediction is not none else 'N/A' }}</td>
                 <td>{{ (row.best_bid * 100)|int if row.best_bid is not none else 'N/A' }}</td>
                 <td>{{ (row.best_ask * 100)|int if row.best_ask is not none else 'N/A' }}</td>
@@ -162,10 +164,11 @@ DATA_VIEWER_TEMPLATE = """
             {% for row in data %}
             <tr>
                 <td>{{ row.timestamp }}</td>
-                <td>{{ row.market_name }}</td>
+                <td>{{ row.market_name|replace(' Up or Down - ', ' - ') }}</td>
                 <td>{{ row.outcome if row.outcome else 'N/A' }}</td>
                 <td>{{ row.spot_price|format_price(spot_decimals) }}</td>
                 <td>{{ "%.4f"|format(row.ofi) if row.ofi is not none else 'N/A' }}</td>
+                <td>{{ "%.2f"|format(row.vol) if row.vol is not none else 'N/A' }}</td>
                 <td>{{ "%.2f"|format(row.p_up_prediction * 100) if row.p_up_prediction is not none else 'N/A' }}</td>
                 <td>{{ (row.best_bid * 100)|int if row.best_bid is not none else 'N/A' }}</td>
                 <td>{{ (row.best_ask * 100)|int if row.best_ask is not none else 'N/A' }}</td>
@@ -197,7 +200,16 @@ def all_page():
             if cur.fetchone() is None:
                 conn.close()
                 continue
-            query = f"SELECT timestamp, market_name, best_bid, best_ask, {spot_price_column} as spot_price, ofi, p_up_prediction, outcome FROM polydata ORDER BY timestamp DESC LIMIT 150"
+            # Detect if 'vol' column exists
+            cur.execute("PRAGMA table_info(polydata);")
+            cols = [r[1] for r in cur.fetchall()]
+            has_vol = 'vol' in cols
+
+            vol_select = 'vol' if has_vol else 'NULL AS vol'
+            query = (
+                f"SELECT timestamp, market_name, best_bid, best_ask, {spot_price_column} as spot_price, ofi, {vol_select}, "
+                f"p_up_prediction, outcome FROM polydata ORDER BY timestamp DESC LIMIT 150"
+            )
             cur.execute(query)
             rows = cur.fetchall()
             conn.close()
@@ -209,6 +221,7 @@ def all_page():
                     'best_ask': r['best_ask'],
                     'spot_price': r['spot_price'],
                     'ofi': r['ofi'],
+                    'vol': r['vol'] if 'vol' in r.keys() else None,
                     'p_up_prediction': r['p_up_prediction'],
                     'outcome': r['outcome'],
                     'currency_code': code,
@@ -267,7 +280,15 @@ def view_data(currency):
         if cursor.fetchone() is None:
             return f"<h1>Data not available yet</h1><p>The table 'polydata' does not exist in {config['db_file']}. Please run the scraper for {config['name']}.</p>", 404
         
-        query = f"SELECT timestamp, market_name, best_bid, best_ask, {spot_price_column} as spot_price, ofi, p_up_prediction, outcome FROM polydata ORDER BY timestamp DESC LIMIT 250"
+        # Detect if 'vol' column exists
+        cursor.execute("PRAGMA table_info(polydata);")
+        cols = [r[1] for r in cursor.fetchall()]
+        has_vol = 'vol' in cols
+        vol_select = 'vol' if has_vol else 'NULL AS vol'
+        query = (
+            f"SELECT timestamp, market_name, best_bid, best_ask, {spot_price_column} as spot_price, ofi, {vol_select}, "
+            f"p_up_prediction, outcome FROM polydata ORDER BY timestamp DESC LIMIT 250"
+        )
         cursor.execute(query)
         data = cursor.fetchall()
         
