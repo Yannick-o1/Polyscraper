@@ -107,7 +107,7 @@ DATA_VIEWER_TEMPLATE = """
                 <td>{{ "%.2f"|format(row.p_up_prediction * 100) if row.p_up_prediction is not none else 'N/A' }}</td>
                 <td>{{ "%.2f"|format(row.best_bid) if row.best_bid is not none else 'N/A' }}</td>
                 <td>{{ "%.2f"|format(row.best_ask) if row.best_ask is not none else 'N/A' }}</td>
-                <td>{{ "%.2f"|format((row.p_up_prediction - (row.best_bid + row.best_ask) / 200) * 100) if row.p_up_prediction is not none and row.best_bid is not none and row.best_ask is not none else 'N/A' }}</td>
+                <td>{{ "%.2f"|format((row.p_up_prediction - ((row.best_bid + row.best_ask) / 2.0)) * 100) if row.p_up_prediction is not none and row.best_bid is not none and row.best_ask is not none else 'N/A' }}</td>
             </tr>
             {% endfor %}
         </tbody>
