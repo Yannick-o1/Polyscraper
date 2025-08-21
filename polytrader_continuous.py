@@ -543,17 +543,7 @@ def get_live_price_and_ofi(currency):
         total_vol = buy_vol + sell_vol
         ofi = (buy_vol - sell_vol) / total_vol if total_vol > 0 else 0.0
 
-        # Debug log to verify functionality per currency
-        try:
-            window_count = int(df.shape[0])
-            cache_after = len(cache)
-            print(
-                f"  🧮 OFI[{currency}] cache_before={cache_before} pruned={pruned} fetched={fetched_count} "
-                f"cache_after={cache_after} window_trades={window_count} buy_vol={buy_vol:.6f} "
-                f"sell_vol={sell_vol:.6f} ofi={ofi:.4f} latest_price={latest_price}"
-            )
-        except Exception:
-            pass
+        # Debug logging removed after verification
 
         return latest_price, ofi
         
