@@ -82,6 +82,9 @@ class TradingState:
         self.last_outcome_update = {}  # Track last outcome update per currency to prevent duplicates
         self.last_cache_minute = {}  # Track last minute when cache was updated per currency
         self.last_api_report_minute = None  # Track last minute when API usage was reported
+        # Cache of Binance aggregated trades (aggTrades) per currency for last ~60s
+        self.agg_trades_cache = defaultdict(lambda: deque())  # currency -> deque of trades (dicts with keys including 'T','q','p','m')
+        self.agg_trades_last_time = {}  # currency -> last fetched trade time (ms)
 
 
 state = TradingState()
@@ -471,25 +474,87 @@ def get_live_price_and_ofi(currency):
         wait_for_rate_limit()
         config = CURRENCY_CONFIG[currency]
         
-        response = requests.get("https://api.binance.com/api/v3/trades", 
-                              params={"symbol": config['asset_symbol'], "limit": 500}, 
-                              timeout=5)
-        response.raise_for_status()
-        trades = response.json()
-        
-        if not trades:
+        # Use per-currency cache of aggTrades to maintain a rolling 60s window
+        now_ms = int(time.time() * 1000)
+        window_start = now_ms - 60_000
+
+        cache = state.agg_trades_cache[currency]
+        cache_before = len(cache)
+
+        # Prune old trades outside the 60s window
+        while cache and cache[0].get("T", 0) < window_start:
+            cache.popleft()
+        pruned = cache_before - len(cache)
+
+        # Determine fetch start: from last cached trade time or window start
+        if cache:
+            fetch_start = cache[-1]["T"] + 1
+        else:
+            fetch_start = window_start
+
+        # Fetch new trades since last cached time up to now
+        fetched_count = 0
+        while fetch_start <= now_ms:
+            wait_for_rate_limit()
+            resp = requests.get(
+                "https://api.binance.com/api/v3/aggTrades",
+                params={
+                    "symbol": config['asset_symbol'],
+                    "startTime": fetch_start,
+                    "endTime": now_ms,
+                    "limit": 1000,
+                },
+                timeout=5,
+            )
+            resp.raise_for_status()
+            batch = resp.json()
+
+            if not batch:
+                break
+
+            # Append to cache
+            cache.extend(batch)
+            fetched_count += len(batch)
+
+            # If fewer than limit returned, we've reached the end
+            if len(batch) < 1000:
+                break
+
+            last_T = batch[-1]["T"]
+            if last_T >= now_ms:
+                break
+            fetch_start = last_T + 1
+
+        if not cache:
             return None, None
-            
-        df = pd.DataFrame(trades)
-        latest_price = float(df.iloc[-1]["price"])
-        df["qty"] = df["qty"].astype(float)
-        
-        # Calculate OFI
-        buy_vol = df[~df["isBuyerMaker"]]["qty"].sum()
-        sell_vol = df[df["isBuyerMaker"]]["qty"].sum()
+
+        # Compute OFI on the cached 60s window
+        # Note: cache elements are raw dicts from aggTrades with keys: p, q, m, T
+        df = pd.DataFrame(list(cache))
+        df = df[df["T"] >= window_start]
+        if df.empty:
+            return None, None
+
+        latest_price = float(df.iloc[-1]["p"])  # last trade price in window
+        df["q"] = df["q"].astype(float)
+
+        buy_vol = df[~df["m"]]["q"].sum()
+        sell_vol = df[df["m"]]["q"].sum()
         total_vol = buy_vol + sell_vol
         ofi = (buy_vol - sell_vol) / total_vol if total_vol > 0 else 0.0
-        
+
+        # Debug log to verify functionality per currency
+        try:
+            window_count = int(df.shape[0])
+            cache_after = len(cache)
+            print(
+                f"  🧮 OFI[{currency}] cache_before={cache_before} pruned={pruned} fetched={fetched_count} "
+                f"cache_after={cache_after} window_trades={window_count} buy_vol={buy_vol:.6f} "
+                f"sell_vol={sell_vol:.6f} ofi={ofi:.4f} latest_price={latest_price}"
+            )
+        except Exception:
+            pass
+
         return latest_price, ofi
         
     except Exception as e:
