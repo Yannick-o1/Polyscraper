@@ -50,6 +50,9 @@ HOME_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <title>Polyscraper Dashboard</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 2em; }
+    </style>
 </head>
 <body>
     <h1>Select a currency to view its data:</h1>
@@ -58,6 +61,29 @@ HOME_TEMPLATE = """
             <li><a href="{{ url_for('view_data', currency=currency_code) }}">{{ currency_data.name }}</a></li>
         {% endfor %}
     </ul>
+</body>
+</html>
+"""
+
+# Simple page that lists all currencies (same as home) but titled "All"
+ALL_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>All</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 2em; }
+    </style>
+</head>
+<body>
+    <h1>All</h1>
+    <ul>
+        {% for currency_code, currency_data in currencies.items() %}
+            <li><a href="{{ url_for('view_data', currency=currency_code) }}">{{ currency_data.name }}</a></li>
+        {% endfor %}
+    </ul>
+    <p><a href="{{ url_for('home') }}">Back to Home</a></p>
 </body>
 </html>
 """
@@ -91,8 +117,8 @@ DATA_VIEWER_TEMPLATE = """
                 <th>Spot Price (USDT)</th>
                 <th>OFI</th>
                 <th>P(Up) Prediction</th>
-                <th>Best Bid</th>
-                <th>Best Ask</th>
+                <th>Best Bid (%)</th>
+                <th>Best Ask (%)</th>
                 <th>Delta</th>
             </tr>
         </thead>
@@ -105,8 +131,8 @@ DATA_VIEWER_TEMPLATE = """
                 <td>{{ row.spot_price|format_price(spot_decimals) }}</td>
                 <td>{{ "%.4f"|format(row.ofi) if row.ofi is not none else 'N/A' }}</td>
                 <td>{{ "%.2f"|format(row.p_up_prediction * 100) if row.p_up_prediction is not none else 'N/A' }}</td>
-                <td>{{ "%.2f"|format(row.best_bid) if row.best_bid is not none else 'N/A' }}</td>
-                <td>{{ "%.2f"|format(row.best_ask) if row.best_ask is not none else 'N/A' }}</td>
+                <td>{{ "%.2f"|format(row.best_bid * 100) if row.best_bid is not none else 'N/A' }}</td>
+                <td>{{ "%.2f"|format(row.best_ask * 100) if row.best_ask is not none else 'N/A' }}</td>
                 <td>{{ "%.2f"|format((row.p_up_prediction - ((row.best_bid + row.best_ask) / 2.0)) * 100) if row.p_up_prediction is not none and row.best_bid is not none and row.best_ask is not none else 'N/A' }}</td>
             </tr>
             {% endfor %}
@@ -119,6 +145,10 @@ DATA_VIEWER_TEMPLATE = """
 @app.route('/', methods=['GET'])
 def home():
     return render_template_string(HOME_TEMPLATE, currencies=CURRENCIES)
+
+@app.route('/all', methods=['GET'])
+def all_page():
+    return render_template_string(ALL_TEMPLATE, currencies=CURRENCIES)
 
 @app.route('/run-scraper/<currency>', methods=['POST'])
 def run_scraper(currency):
