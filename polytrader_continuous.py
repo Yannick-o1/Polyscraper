@@ -1108,6 +1108,7 @@ def trade_currency_cycle(currency):
         timings['market'] = time.time() - start
         
         if not token_yes:
+            print(f"  ⚠️ {currency.upper()}: No current market found (update markets CSV?)")
             return False
         
         # Step 2: Get live price and OFI
@@ -1116,12 +1117,10 @@ def trade_currency_cycle(currency):
         timings['binance'] = time.time() - start
         
         if not spot_price:
+            print(f"  ⚠️ {currency.upper()}: No live spot price/OFI available from Binance")
             return False
 
-        # Step 2.5: Proactively cancel any existing open orders before placing new ones
-        # This keeps the book clean and avoids conflicting resting orders
-        if TRADING_ENABLED and state.polymarket_client:
-            cancel_all_open_orders()
+        # Note: Order cancellations are now throttled in continuous_trading_loop
         
         # Step 3: Get order book prices
         start = time.time()
@@ -1129,6 +1128,7 @@ def trade_currency_cycle(currency):
         timings['orderbook'] = time.time() - start
         
         if not best_bid or not best_ask:
+            print(f"  ⚠️ {currency.upper()}: No order book data (bid/ask) for token {token_yes}")
             return False
         
         # Calculate market price
@@ -1345,18 +1345,19 @@ def continuous_trading_loop():
             cycle_count += 1
             
             timestamp = datetime.now(UTC).strftime('%H:%M:%S')
+            
+            # Throttle cancel-all: run every 3 cycles to reduce API load
+            if TRADING_ENABLED and state.polymarket_client and (cycle_count % 3 == 0):
+                print("  🟥 CANCEL-ALL: Triggering bulk cancellation (every 3 cycles)")
+                cancel_all_open_orders()
+
+            # Determine which currency to trade this cycle
             current_currency = currencies[currency_index]
             print(f"\n\n⚡ {timestamp} [Cycle {cycle_count}] - {current_currency.upper()}")
             
-            
-            
-            # Report API usage statistics once per minute
+            # Report API usage once per minute
             report_api_usage_if_new_minute()
             
-            # Cancel all open orders every 3 cycles
-            if TRADING_ENABLED and cycle_count % 3 == 1:
-                print(f"  🟥 CANCELLING ALL OPEN ORDERS (Cycle {cycle_count})")
-                cancel_all_open_orders()
             
             # Trade current currency
             trade_currency_cycle(current_currency)

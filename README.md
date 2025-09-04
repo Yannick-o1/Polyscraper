@@ -100,12 +100,13 @@ This is experimental trading software. Only use with funds you can afford to los
 - **Deployment**: AWS EC2 with systemd
 
 
-C/P:
+PUSH:
 
 git add .
-
 git commit -m "ADD"
 git push origin main
+
+START BOT:
 
 sudo systemctl stop polytrader
 
@@ -117,8 +118,17 @@ sudo systemctl start polytrader
 
 sudo journalctl -f -u polytrader
 
+LOGIN
+
 chmod 400 /Users/yannickofungi/Downloads/aws-github-runner.pem 
 ssh -i /Users/yannickofungi/Downloads/aws-github-runner.pem  ubuntu@3.71.4.27
 
 cd ~/Polyscraper
 source venv/bin/activate
+
+
+DOWNLOAD DATA (On Local Machine)
+
+scp -i /Users/yannickofungi/Downloads/aws-github-runner.pem \
+  "ubuntu@3.71.4.27:/home/ubuntu/Polyscraper/*polyscraper.db*" \
+  ~/Downloads/
