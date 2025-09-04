@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 # Polymarket imports
 try:
     from py_clob_client.client import ClobClient
-    from py_clob_client.clob_types import OrderArgs, OrderType, BalanceAllowanceParams, AssetType
+    from py_clob_client.clob_types import OrderArgs, OrderType, BalanceAllowanceParams, AssetType, OpenOrderParams
     from py_clob_client.order_builder.constants import BUY, SELL
     POLYMARKET_AVAILABLE = True
 except ImportError:
@@ -701,18 +701,15 @@ def place_order(side, token_id, price, size_shares, current_bid=None, current_as
             print(f"  ❌ Spread too wide: ${spread:.2f} (>30¢) - skipping trade")
             return False
         
-        # Move 30% of half-spread toward favorable side from midpoint
-        half_spread_30_percent = (spread / 2) * 0.30
-        
+        # Pricing logic: BUY at midpoint as requested; keep SELL logic unchanged (slightly above midpoint)
         if side == "BUY":
-            # For BUY orders, pay LESS than midpoint (better for buyer)
-            optimal_price = midpoint - half_spread_30_percent
-            # Ensure we don't go below bid
-            optimal_price = max(optimal_price, best_bid + 0.01)
+            # Place BUY at exact midpoint (bounded within the spread just in case)
+            optimal_price = midpoint
+            optimal_price = min(max(optimal_price, best_bid + 0.01), best_ask - 0.01)
         else:  # SELL
-            # For SELL orders, receive MORE than midpoint (better for seller)
+            # Retain previous behavior for SELL: slightly above midpoint toward ask
+            half_spread_30_percent = (spread / 2) * 0.30
             optimal_price = midpoint + half_spread_30_percent
-            # Ensure we don't go above ask
             optimal_price = min(optimal_price, best_ask - 0.01)
         
         # Round to 2 decimal places (nearest cent)
@@ -1120,6 +1117,11 @@ def trade_currency_cycle(currency):
         
         if not spot_price:
             return False
+
+        # Step 2.5: Proactively cancel any existing open orders before placing new ones
+        # This keeps the book clean and avoids conflicting resting orders
+        if TRADING_ENABLED and state.polymarket_client:
+            cancel_all_open_orders()
         
         # Step 3: Get order book prices
         start = time.time()
@@ -1377,48 +1379,40 @@ def continuous_trading_loop():
         state.running = False
 
 def cancel_all_open_orders():
-    """Cancel all open orders to prevent overlapping and increase dynamism."""
+    """Cancel all open orders via the official client method."""
     if not state.polymarket_client:
         return 0
-    
+
     try:
         wait_for_rate_limit()
-        
-        # Get all open orders
-        response = state.polymarket_client.get_orders()
-        
-        if not response or 'data' not in response:
-            return 0
-        
-        open_orders = [order for order in response['data'] if order.get('status') == 'LIVE']
-        
-        if not open_orders:
-            return 0
-        
-        cancelled_count = 0
-        
-        # Cancel each open order
-        for order in open_orders:
-            try:
-                wait_for_rate_limit()
-                cancel_response = state.polymarket_client.cancel_order(order['id'])
-                
-                if cancel_response.get('success', False):
-                    cancelled_count += 1
-                    
-            except Exception:
-                # Log individual order cancellation errors but continue
-                pass
-        
-        if cancelled_count > 0:
-            print(f"  🗑️ Cancelled {cancelled_count} open orders")
+
+        # Prefer the built-in bulk cancel endpoint
+        resp = state.polymarket_client.cancel_all()
+
+        # The client may return a dict with success/numCancelled or a bare True
+        if isinstance(resp, dict):
+            cancelled = int(resp.get("numCancelled", resp.get("cancelled", 0)))
+            if cancelled > 0:
+                print(f"  🗑️ Cancelled {cancelled} open orders")
+            else:
+                print("  🗑️ No open orders to cancel")
+            return cancelled
         else:
-            print(f"  🗑️ No open orders to cancel")
-        
-        return cancelled_count
-        
-    except Exception:
+            # If truthy without details, fetch current orders to infer
+            wait_for_rate_limit()
+            open_orders = state.polymarket_client.get_orders(OpenOrderParams())
+            count = len(open_orders) if isinstance(open_orders, list) else 0
+            # If still have orders, report 0; otherwise assume some were cancelled
+            if count == 0:
+                print("  🗑️ Cancelled all open orders")
+                return -1  # unknown count
+            else:
+                print("  🗑️ Some orders may remain after cancel_all()")
+                return 0
+
+    except Exception as e:
         # Silently handle API errors - don't let order cancellation stop trading
+        print(f"  ⚠️ Cancel-all error: {e}")
         return 0
 
 def get_current_bankroll():
