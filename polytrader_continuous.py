@@ -701,14 +701,14 @@ def place_order(side, token_id, price, size_shares, current_bid=None, current_as
             print(f"  ❌ Spread too wide: ${spread:.2f} (>30¢) - skipping trade")
             return False
         
-        # Pricing logic: BUY at midpoint as requested; keep SELL logic unchanged (slightly above midpoint)
+        # Pricing logic (reverted):
+        # - BUY slightly below midpoint toward bid (30% of half-spread)
+        # - SELL slightly above midpoint toward ask (existing behavior)
+        half_spread_30_percent = (spread / 2) * 0.30
         if side == "BUY":
-            # Place BUY at exact midpoint (bounded within the spread just in case)
-            optimal_price = midpoint
-            optimal_price = min(max(optimal_price, best_bid + 0.01), best_ask - 0.01)
+            optimal_price = midpoint - half_spread_30_percent
+            optimal_price = max(optimal_price, best_bid + 0.01)
         else:  # SELL
-            # Retain previous behavior for SELL: slightly above midpoint toward ask
-            half_spread_30_percent = (spread / 2) * 0.30
             optimal_price = midpoint + half_spread_30_percent
             optimal_price = min(optimal_price, best_ask - 0.01)
         
