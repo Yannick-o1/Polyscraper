@@ -55,11 +55,15 @@ CURRENCY_CONFIG = {
 }
 
 # Trading parameters
-BANKROLL_FRACTION = 0.85
-PROBABILITY_DELTA_THRESHOLD = 3.21
+BANKROLL_FRACTION = 0.8
+PROBABILITY_DELTA_THRESHOLD = 3.2
 MINIMUM_ORDER_SIZE_SHARES = 5.0
 CYCLE_DELAY_SECONDS = 2.0
 API_CALLS_PER_MINUTE = 80
+
+# Order maintenance tolerances (Polymarket prices are 0-1)
+PRICE_TOLERANCE = 0.01  # price units (1 = $1)
+SIZE_TOLERANCE = 0.05   # shares
 
 # Environment
 TRADING_ENABLED = True
@@ -673,6 +677,140 @@ def calculate_model_prediction(currency, current_price, ofi, market_price):
         traceback.print_exc()
         return None
 
+def _parse_float(value):
+    """Convert values that may be strings to float, return None on failure."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def calculate_optimal_order_price(side, best_bid, best_ask):
+    """Calculate optimal limit price given current bid/ask."""
+    if best_bid is None or best_ask is None:
+        return None, None
+
+    spread = best_ask - best_bid
+    if spread <= 0:
+        return None, spread
+
+    midpoint = (best_bid + best_ask) / 2
+    half_spread_30_percent = (spread / 2) * 0.30
+
+    if side == "BUY":
+        optimal_price = midpoint - half_spread_30_percent
+        optimal_price = max(optimal_price, best_bid + 0.01)
+    else:
+        optimal_price = midpoint + half_spread_30_percent
+        optimal_price = min(optimal_price, best_ask - 0.01)
+
+    optimal_price = round(optimal_price, 2)
+    return optimal_price, spread
+
+
+def get_open_orders_for_token(token_id):
+    """Fetch open orders for a specific token id."""
+    if not state.polymarket_client:
+        return []
+
+    try:
+        wait_for_rate_limit()
+        params = OpenOrderParams(asset_id=str(token_id))
+        raw_orders = state.polymarket_client.get_orders(params)
+    except Exception as e:
+        print(f"  ⚠️ Unable to fetch open orders for token {token_id}: {e}")
+        return []
+
+    normalized = []
+    if not isinstance(raw_orders, list):
+        return normalized
+
+    for order in raw_orders:
+        if not isinstance(order, dict):
+            continue
+
+        order_id = order.get("id") or order.get("order_id") or order.get("orderID")
+        if not order_id:
+            continue
+
+        order_asset = str(order.get("asset_id") or order.get("token_id") or "")
+        if order_asset and order_asset != str(token_id):
+            continue
+
+        side = (order.get("side") or order.get("direction") or order.get("action") or "").upper()
+        price = _parse_float(order.get("price") or order.get("limit_price"))
+
+        remaining = None
+        for key in ("remaining", "unfilled", "amount", "size"):
+            remaining = _parse_float(order.get(key))
+            if remaining is not None:
+                break
+
+        normalized.append({
+            "id": str(order_id),
+            "side": side,
+            "price": price,
+            "remaining": remaining
+        })
+
+    return normalized
+
+
+def cancel_orders_by_ids(order_ids, token_id):
+    """Cancel a list of order ids using the appropriate client method."""
+    if not order_ids or not state.polymarket_client:
+        return
+
+    unique_ids = list({str(order_id) for order_id in order_ids})
+
+    try:
+        wait_for_rate_limit()
+        if len(unique_ids) == 1:
+            state.polymarket_client.cancel(unique_ids[0])
+        else:
+            state.polymarket_client.cancel_orders(unique_ids)
+        print(f"  🗑️ Cancelled {len(unique_ids)} stale order(s) for token {token_id}")
+    except Exception as e:
+        print(f"  ⚠️ Failed to cancel stale orders for token {token_id}: {e}")
+
+
+def ensure_current_order_alignment(token_id, side, target_price, target_size):
+    """Cancel misaligned orders and report if an aligned order already exists."""
+    if not state.polymarket_client:
+        return False
+
+    open_orders = get_open_orders_for_token(token_id)
+    if not open_orders:
+        return False
+
+    side = side.upper()
+    aligned = False
+    stale_ids = []
+
+    for order in open_orders:
+        order_side = order.get("side") or ""
+        if order_side != side:
+            stale_ids.append(order["id"])
+            continue
+
+        price = order.get("price")
+        remaining = order.get("remaining")
+        price_ok = price is not None and abs(price - target_price) <= PRICE_TOLERANCE
+        size_ok = remaining is not None and abs(remaining - target_size) <= SIZE_TOLERANCE
+
+        if price_ok and size_ok:
+            aligned = True
+        else:
+            stale_ids.append(order["id"])
+
+    if stale_ids:
+        cancel_orders_by_ids(stale_ids, token_id)
+
+    return aligned
+
+
 def place_order(side, token_id, price, size_shares, current_bid=None, current_ask=None):
     """Place a BUY or SELL order on Polymarket with optimal pricing."""
     if not state.polymarket_client:
@@ -692,28 +830,19 @@ def place_order(side, token_id, price, size_shares, current_bid=None, current_as
                 print(f"  ❌ Cannot get order book for optimal pricing")
                 return False
         
-        # Calculate spread and optimal price
-        spread = best_ask - best_bid
-        midpoint = (best_bid + best_ask) / 2
-        
+        optimal_price, spread = calculate_optimal_order_price(side, best_bid, best_ask)
+        if optimal_price is None:
+            print(f"  ❌ Cannot determine optimal price for {side} order (bid={best_bid}, ask={best_ask})")
+            return False
+
         # Don't trade if spread is too wide (>20 cents)
         if spread > 30:
             print(f"  ❌ Spread too wide: ${spread:.2f} (>30¢) - skipping trade")
             return False
-        
-        # Pricing logic (reverted):
-        # - BUY slightly below midpoint toward bid (30% of half-spread)
-        # - SELL slightly above midpoint toward ask (existing behavior)
-        half_spread_30_percent = (spread / 2) * 0.30
-        if side == "BUY":
-            optimal_price = midpoint - half_spread_30_percent
-            optimal_price = max(optimal_price, best_bid + 0.01)
-        else:  # SELL
-            optimal_price = midpoint + half_spread_30_percent
-            optimal_price = min(optimal_price, best_ask - 0.01)
-        
-        # Round to 2 decimal places (nearest cent)
-        optimal_price = round(optimal_price, 2)
+
+        if ensure_current_order_alignment(token_id, side, optimal_price, size_shares):
+            print(f"  💤 Existing {side} order already aligned ({size_shares:.2f} @ ${optimal_price:.2f})")
+            return True
         
         # Create order with 2-minute expiration
         expiration = int((datetime.now(UTC) + timedelta(minutes=2)).timestamp())
@@ -1347,9 +1476,9 @@ def continuous_trading_loop():
             timestamp = datetime.now(UTC).strftime('%H:%M:%S')
             
             # Throttle cancel-all: run every 3 cycles to reduce API load
-            if TRADING_ENABLED and state.polymarket_client and (cycle_count % 3 == 0):
-                print("  🟥 CANCEL-ALL: Triggering bulk cancellation (every 3 cycles)")
-                cancel_all_open_orders()
+            # if TRADING_ENABLED and state.polymarket_client and (cycle_count % 3 == 0):
+            #     print("  🟥 CANCEL-ALL: Triggering bulk cancellation (every 3 cycles)")
+            #     cancel_all_open_orders()
 
             # Determine which currency to trade this cycle
             current_currency = currencies[currency_index]
