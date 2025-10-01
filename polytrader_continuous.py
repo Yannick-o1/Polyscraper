@@ -61,6 +61,9 @@ MINIMUM_ORDER_SIZE_SHARES = 5.0
 CYCLE_DELAY_SECONDS = 2.0
 API_CALLS_PER_MINUTE = 80
 
+# Order maintenance tolerances (Polymarket prices are 0-1)
+PRICE_TOLERANCE = 0.01  # price units (1 = $1)
+SIZE_TOLERANCE = 0.05   # shares
 
 # Environment
 TRADING_ENABLED = True
