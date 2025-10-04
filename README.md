@@ -2,7 +2,7 @@
 
 An automated cryptocurrency prediction market trading system that runs continuously on AWS EC2, analyzing crypto price movements and executing trades on Polymarket.
 
-## 🎯 **How It Works**
+##  **How It Works**
 
 The bot continuously cycles through Bitcoin, Ethereum, Solana, and XRP markets:
 
@@ -12,7 +12,7 @@ The bot continuously cycles through Bitcoin, Ethereum, Solana, and XRP markets:
 4. **Dynamic Trading**: Adjusts positions based on prediction confidence and available bankroll
 5. **Risk Management**: Implements minimum order sizes, spread checks, and position limits
 
-## 🚀 **Key Features**
+##  **Key Features**
 
 - **Continuous Operation**: Runs 24/7 with ~2-second cycle times
 - **Dynamic Position Sizing**: Trades proportional to prediction confidence
@@ -21,14 +21,14 @@ The bot continuously cycles through Bitcoin, Ethereum, Solana, and XRP markets:
 - **Rate Limiting**: Respects API limits for both Binance and Polymarket
 - **Comprehensive Logging**: Detailed timing and position tracking
 
-## 📊 **Trading Logic**
+##  **Trading Logic**
 
 - **Entry Threshold**: ±3 percentage points delta between prediction and market
 - **Position Sizing**: `bankroll_fraction × bankroll × |delta|`  
 - **Risk Limits**: Maximum 80% of bankroll exposure
 - **Order Management**: Cancels previous orders each cycle for maximum dynamism
 
-## 🔧 **Installation**
+##  **Installation**
 
 1. **Clone and Setup**:
    ```bash
@@ -50,7 +50,7 @@ The bot continuously cycles through Bitcoin, Ethereum, Solana, and XRP markets:
    python3 polytrader_continuous.py
    ```
 
-## 🔰 **Deployment (AWS EC2)**
+##  **Deployment (AWS EC2)**
 
 1. **Setup EC2 Instance** with the repository
 2. **Install Dependencies** and configure environment
@@ -68,30 +68,30 @@ The bot continuously cycles through Bitcoin, Ethereum, Solana, and XRP markets:
    sudo journalctl -u polytrader -f
    ```
 
-## 📁 **Project Structure**
+##  **Project Structure**
 
 ```
 Polyscraper/
-├── polytrader_continuous.py    # 🎯 Main trading bot
-├── polytrader.service          # ⚙️ Systemd service config  
-├── app.py                      # 📱 Flask web dashboard
-├── *_lgbm.txt                  # 🤖 Pre-trained ML models
-├── requirements.txt            # 📦 Python dependencies
-└── README.md                   # 📖 This file
+├── polytrader_continuous.py    #  Main trading bot
+├── polytrader.service          #  Systemd service config  
+├── app.py                      #  Flask web dashboard
+├── *_lgbm.txt                  #  Pre-trained ML models
+├── requirements.txt            #  Python dependencies
+└── README.md                   #  This file
 ```
 
-## 📈 **Performance**
+##  **Performance**
 
 - **Cycle Time**: ~2 seconds per full cycle (4 currencies)
 - **API Efficiency**: Parallel bid/ask calls, intelligent caching
 - **Uptime**: Designed for 24/7 operation with automatic restarts
 - **Accuracy**: Uses exact Binance hour-start prices for ML features
 
-## ⚠️ **Risk Disclosure**
+##  **Risk Disclosure**
 
 This is experimental trading software. Only use with funds you can afford to lose. Past performance does not guarantee future results. Review all code and test thoroughly before live deployment.
 
-## 🛠️ **Development**
+##  **Development**
 
 - **Languages**: Python 3.8+
 - **ML Framework**: LightGBM
@@ -99,6 +99,7 @@ This is experimental trading software. Only use with funds you can afford to los
 - **Database**: SQLite for data storage
 - **Deployment**: AWS EC2 with systemd
 
+////// 
 
 PUSH:
 
